@@ -1,4 +1,11 @@
 -- ============================================================
+-- DO NOT RUN ON THE LIVE DATABASE. Historical file only.
+-- The policies in sections 3 to 5 below (`to authenticated using (true)`) would let EVERY signed-in
+-- student write to the free-resource tables and the free-resources storage bucket. The live policies
+-- allow admins only. See docs/SQL_DO_NOT_RUN_ON_LIVE.md. Only the database owner changes the database.
+-- ============================================================
+
+-- ============================================================
 -- Wisdom Tower Academy — Free resources (pages + items)
 -- Run in Supabase → SQL Editor → New query → Run
 -- Safe to re-run (IF NOT EXISTS / ON CONFLICT)
