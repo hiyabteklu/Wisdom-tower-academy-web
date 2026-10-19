@@ -1,4 +1,11 @@
 -- ============================================================
+-- DO NOT RUN ON THE LIVE DATABASE. Historical file only.
+-- The live policies are stricter (admin-only writes through private.is_admin()).
+-- The select policies below are open to every signed-in account (drafts included).
+-- See docs/SQL_DO_NOT_RUN_ON_LIVE.md. Only the database owner changes the database.
+-- ============================================================
+
+-- ============================================================
 -- Run this if published stories do not show for logged-out users
 -- ============================================================
 
