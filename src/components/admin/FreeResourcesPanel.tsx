@@ -5,6 +5,7 @@
 // Changes now: kit page header, kit cards, fields, pills and badges; the page chips stay a 2-column grid of buttons (they carry
 // a status icon) in the kit gold; the item editor is a kit bottom sheet with Save in its footer; the browser confirm before
 // Delete is a kit bottom sheet (same sentence); messages are the kit slim toast (above the sheet, 4.5 s, as before).
+// 2026-10-19: the two save-failed fallback messages no longer tell admins to run the old setup SQL script (it must not be run on the live database).
 
 import { useCallback, useEffect, useState } from "react";
 import {
@@ -153,7 +154,7 @@ export default function FreeResourcesPanel() {
     });
     setSavingPage(false);
     if (!res.ok) {
-      setToast(res.error || "Page save failed. Run docs/free-resources-setup.sql");
+      setToast(res.error || "Page save failed. Tell the database owner. Do not run the old setup scripts.");
       return;
     }
     setToast(pagePublished ? "Page saved and published" : "Page saved (draft)");
@@ -239,7 +240,7 @@ export default function FreeResourcesPanel() {
     });
     setSavingItem(false);
     if (!res.ok) {
-      setToast(res.error || "Item save failed. Run docs/free-resources-setup.sql");
+      setToast(res.error || "Item save failed. Tell the database owner. Do not run the old setup scripts.");
       return;
     }
     setToast(itPublished ? "Item published" : "Item saved as draft");
