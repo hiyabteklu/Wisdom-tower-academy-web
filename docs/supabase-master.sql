@@ -1,4 +1,13 @@
 -- ============================================================
+-- DO NOT RUN ON THE LIVE DATABASE. Historical file only.
+-- This script re-creates open policies (`using (true)`, `auth.role() = 'authenticated'`, "Public read profiles basic",
+-- "Anyone manage rate limits", update rights on orders and inquiries for every signed-in account). Policies ADD UP,
+-- so running it would let every signed-in student read all profiles and orders and change orders, and would open
+-- the rate-limit table to everyone. The live policies are stricter and use private.is_admin().
+-- See docs/SQL_DO_NOT_RUN_ON_LIVE.md. Only the database owner changes the database.
+-- ============================================================
+
+-- ============================================================
 -- Wisdom Tower — MASTER SCHEMA (idempotent, safe to re-run)
 -- Supabase Dashboard → SQL Editor → New query → paste ALL → Run
 -- ============================================================
