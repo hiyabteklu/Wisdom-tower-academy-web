@@ -17,6 +17,68 @@ export const supabaseAnonKey =
 export const STORAGE_KEY = "wt-academy-auth-v1";
 
 /**
+ * True only inside the Wisdom Tower Android app's WebView (never plain browsers,
+ * and never other apps' in-app browsers such as Telegram or Facebook).
+ * Same signals the app already uses: the "WisdomTowerApp" user-agent token or
+ * the JavaScript bridge objects the app injects.
+ */
+function isWisdomTowerAppShell(): boolean {
+  if (typeof window === "undefined" || typeof navigator === "undefined") {
+    return false;
+  }
+  try {
+    if (/WisdomTowerApp/i.test(navigator.userAgent || "")) return true;
+    const w = window as unknown as Record<string, unknown>;
+    return Boolean(
+      w.Android ||
+        w.AndroidBridge ||
+        w.WisdomTower ||
+        w.wtaNative ||
+        w.__wtaNativeApp,
+    );
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Inside the app the NATIVE code is the only thing allowed to refresh the login.
+ * Supabase refresh tokens are single-use: when the native app and this page
+ * both refreshed with the same token, one of them hit
+ * "refresh_token_already_used", Supabase revoked the session, and both sides
+ * then retried the dead token every 2 seconds (the signed in/out flicker).
+ * The native app refreshes on every app resume and before its own data calls,
+ * then writes the fresh session into this page's localStorage.
+ *
+ * Blocking is done by failing the refresh request locally with a network-style
+ * error. supabase-js treats that as retryable and KEEPS the stored session
+ * (it only deletes the session on a real server rejection).
+ */
+const IN_NATIVE_APP = isWisdomTowerAppShell();
+
+const appAwareFetch: typeof fetch = (input, init) => {
+  try {
+    const url =
+      typeof input === "string"
+        ? input
+        : input instanceof URL
+          ? input.href
+          : (input as Request).url;
+    if (
+      url.includes("/auth/v1/token") &&
+      url.includes("grant_type=refresh_token")
+    ) {
+      return Promise.reject(
+        new TypeError("Token refresh is handled by the Wisdom Tower app"),
+      );
+    }
+  } catch {
+    /* fall through to the real fetch */
+  }
+  return fetch(input, init);
+};
+
+/**
  * Checks if a JWT token is synthetic, placeholder, or has an invalid signature
  * that would fail cryptographic verification in PostgREST (causing "No suitable key or wrong key type").
  */
@@ -133,12 +195,14 @@ const authStorage: SupportedStorage = {
 export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
   auth: {
     persistSession: true,
-    autoRefreshToken: true,
+    // In the Android app the native code owns token refresh (see above).
+    autoRefreshToken: !IN_NATIVE_APP,
     detectSessionInUrl: true,
     flowType: "implicit",
     storage: authStorage,
     storageKey: STORAGE_KEY,
   },
+  ...(IN_NATIVE_APP ? { global: { fetch: appAwareFetch } } : {}),
 });
 
 let _anonClient: ReturnType<typeof createClient> | null = null;
