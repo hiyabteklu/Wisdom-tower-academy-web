@@ -19,8 +19,12 @@ export const STORAGE_KEY = "wt-academy-auth-v1";
 /**
  * True only inside the Wisdom Tower Android app's WebView (never plain browsers,
  * and never other apps' in-app browsers such as Telegram or Facebook).
- * Same signals the app already uses: the "WisdomTowerApp" user-agent token or
- * the JavaScript bridge objects the app injects.
+ * Same signals the app already uses: the "WisdomTowerApp" user-agent token, the
+ * JavaScript bridge objects the app injects, or the window.__wtaNativeApp flag the
+ * app sets when it pushes the session into the page.
+ *
+ * Evaluated at CALL time (not once at import), so it does not matter whether the
+ * app's injected script ran before or after this module loaded.
  */
 function isWisdomTowerAppShell(): boolean {
   if (typeof window === "undefined" || typeof navigator === "undefined") {
@@ -42,35 +46,83 @@ function isWisdomTowerAppShell(): boolean {
 }
 
 /**
- * Inside the app the NATIVE code is the only thing allowed to refresh the login.
- * Supabase refresh tokens are single-use: when the native app and this page
- * both refreshed with the same token, one of them hit
- * "refresh_token_already_used", Supabase revoked the session, and both sides
- * then retried the dead token every 2 seconds (the signed in/out flicker).
- * The native app refreshes on every app resume and before its own data calls,
- * then writes the fresh session into this page's localStorage.
+ * HOW LOGIN REFRESH WORKS INSIDE THE ANDROID APP
  *
- * Blocking is done by failing the refresh request locally with a network-style
- * error. supabase-js treats that as retryable and KEEPS the stored session
- * (it only deletes the session on a real server rejection).
+ * Supabase refresh tokens are single-use. When the native app and this page
+ * both refreshed with the same token, one of them hit
+ * "refresh_token_already_used", Supabase revoked the whole session, and both
+ * sides then retried the dead token every 2 seconds (the signed in/out flicker).
+ *
+ * So inside the app the NATIVE code is the only refresher. It renews the login
+ * about 5 minutes before expiry (checked every 45 s while the app is visible,
+ * and on every return to the foreground) and writes the fresh session into this
+ * page's localStorage. This page never calls Supabase to refresh. Instead, when
+ * supabase-js wants to refresh (its timer, or getSession on an expired token),
+ * the request is answered locally with the session the app already pushed, so
+ * the page stays signed in however long a student reads. If the app has not
+ * delivered a fresh session yet, the request waits briefly and then fails with a
+ * network-style error: supabase-js treats that as retryable and KEEPS the stored
+ * session (it only deletes it on a real server rejection).
+ *
+ * Plain browsers are unaffected: every request goes straight to Supabase.
  */
-const IN_NATIVE_APP = isWisdomTowerAppShell();
+const MIN_VALID_SECONDS = 60;
+const NATIVE_REFRESH_WAIT_MS = 4000;
+const NATIVE_REFRESH_POLL_MS = 250;
+
+function readFreshNativeSession(): Record<string, unknown> | null {
+  try {
+    const raw = window.localStorage.getItem(STORAGE_KEY);
+    if (!raw) return null;
+    const s = JSON.parse(raw);
+    if (!s || typeof s !== "object") return null;
+    if (
+      isCorruptOrSyntheticToken(s.access_token) ||
+      typeof s.refresh_token !== "string" ||
+      !s.refresh_token ||
+      !s.user
+    ) {
+      return null;
+    }
+    const left = (Number(s.expires_at) || 0) - Math.floor(Date.now() / 1000);
+    if (left < MIN_VALID_SECONDS) return null;
+    return { ...s, token_type: s.token_type || "bearer", expires_in: left };
+  } catch {
+    return null;
+  }
+}
+
+async function answerRefreshFromNativeSession(): Promise<Response> {
+  const deadline = Date.now() + NATIVE_REFRESH_WAIT_MS;
+  for (;;) {
+    const session = readFreshNativeSession();
+    if (session) {
+      return new Response(JSON.stringify(session), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+    if (Date.now() >= deadline) break;
+    await new Promise((resolve) => setTimeout(resolve, NATIVE_REFRESH_POLL_MS));
+  }
+  throw new TypeError("Token refresh is handled by the Wisdom Tower app");
+}
 
 const appAwareFetch: typeof fetch = (input, init) => {
   try {
-    const url =
-      typeof input === "string"
-        ? input
-        : input instanceof URL
-          ? input.href
-          : (input as Request).url;
-    if (
-      url.includes("/auth/v1/token") &&
-      url.includes("grant_type=refresh_token")
-    ) {
-      return Promise.reject(
-        new TypeError("Token refresh is handled by the Wisdom Tower app"),
-      );
+    if (isWisdomTowerAppShell()) {
+      const url =
+        typeof input === "string"
+          ? input
+          : input instanceof URL
+            ? input.href
+            : (input as Request).url;
+      if (
+        url.includes("/auth/v1/token") &&
+        url.includes("grant_type=refresh_token")
+      ) {
+        return answerRefreshFromNativeSession();
+      }
     }
   } catch {
     /* fall through to the real fetch */
@@ -195,14 +247,15 @@ const authStorage: SupportedStorage = {
 export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
   auth: {
     persistSession: true,
-    // In the Android app the native code owns token refresh (see above).
-    autoRefreshToken: !IN_NATIVE_APP,
+    autoRefreshToken: true,
     detectSessionInUrl: true,
     flowType: "implicit",
     storage: authStorage,
     storageKey: STORAGE_KEY,
   },
-  ...(IN_NATIVE_APP ? { global: { fetch: appAwareFetch } } : {}),
+  // Browser only: lets the Android app answer refresh requests itself (see above).
+  // Passes every other request, and every request outside the app, straight through.
+  ...(typeof window !== "undefined" ? { global: { fetch: appAwareFetch } } : {}),
 });
 
 let _anonClient: ReturnType<typeof createClient> | null = null;
