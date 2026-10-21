@@ -38,6 +38,10 @@ export type LearningResource = {
   meta: Record<string, unknown>;
   published: boolean;
   createdAt?: string;
+  /** Number of cards / questions, filled by the database without loading `meta`. */
+  itemCount?: number | null;
+  /** Set when the content locks refuse this student (content stays empty). */
+  lockGate?: "package_required" | "coming_soon";
 };
 
 export type ResourceInput = {
@@ -137,6 +141,7 @@ function rowToResource(row: Record<string, unknown>): LearningResource {
     meta: (row.meta as Record<string, unknown>) || {},
     published: Boolean(row.published),
     createdAt: row.created_at ? String(row.created_at) : undefined,
+    itemCount: row.item_count != null ? Number(row.item_count) : null,
   };
 }
 
@@ -156,12 +161,106 @@ function isCryptoOrTokenError(msg?: string): boolean {
   );
 }
 
+/**
+ * Columns students may read straight from the table.
+ *
+ * Since 2026-10-20 (Android app change S4) the database revokes SELECT on
+ * learning_resources.body_md and .meta from the public and signed-in roles, so
+ * `select("*")` fails with "permission denied". Notes, flashcards, quizzes and
+ * exams are opened through the database function open_resource(), which applies
+ * the content locks. Admins read everything through the learning_resources_admin
+ * view (all columns, empty for non-admins).
+ */
+const LIGHT_COLUMNS =
+  "id,package_id,scope_path,hub,title,chapter,sort_order,content_type,storage_path,published,created_at,item_count";
+
+type Row = Record<string, unknown>;
+type RowsResult = { data: Row[] | null; error: { message: string } | null };
+
+type OpenResourceReply = {
+  status?: string;
+  row?: Row;
+  gate?: string;
+} | null;
+
+/**
+ * Open ONE item with its full content (body_md / meta) through the lock-checked
+ * database door. Signed-in students only.
+ */
+export async function openResource(
+  id: string
+): Promise<{
+  item?: LearningResource;
+  gate?: "package_required" | "coming_soon";
+  error?: string;
+}> {
+  try {
+    const { data, error } = await supabase.rpc("open_resource", { p_id: id });
+    if (error) return { error: "Unable to load item." };
+    const reply = data as OpenResourceReply;
+    if (!reply) return { error: "Unable to load item." };
+    if (reply.status === "ok" && reply.row) {
+      return { item: rowToResource(reply.row) };
+    }
+    if (reply.status === "locked") {
+      return {
+        gate: reply.gate === "package_required" ? "package_required" : "coming_soon",
+        error: "This material is locked.",
+      };
+    }
+    if (reply.status === "not_signed_in") {
+      return { error: "Sign in required to access learning content." };
+    }
+    return { error: "Item not found." };
+  } catch {
+    return { error: "Unable to load item." };
+  }
+}
+
+/**
+ * Light list rows carry no body_md / meta. Fill them in (a few at a time) so the
+ * existing viewers, offline cache and games keep working unchanged. PDFs need no
+ * body. Locked items stay in the list with `lockGate` set and empty content.
+ */
+async function hydrateContent(items: LearningResource[]): Promise<LearningResource[]> {
+  const out = items.slice();
+  const todo: number[] = [];
+  out.forEach((it, i) => {
+    if (it.contentType !== "pdf") todo.push(i);
+  });
+  if (todo.length === 0) return out;
+
+  let next = 0;
+  const worker = async () => {
+    while (next < todo.length) {
+      const i = todo[next++];
+      const it = out[i];
+      const res = await openResource(it.id);
+      if (res.item) {
+        out[i] = {
+          ...it,
+          bodyMd: res.item.bodyMd,
+          meta: res.item.meta,
+        };
+      } else if (res.gate) {
+        out[i] = { ...it, lockGate: res.gate };
+      }
+    }
+  };
+  await Promise.all(
+    Array.from({ length: Math.min(6, todo.length) }, () => worker())
+  );
+  return out;
+}
+
 export async function listResources(opts: {
   scopePath?: string;
   hub?: HubId;
   packageId?: string;
   publishedOnly?: boolean;
   skipAuthCheck?: boolean;
+  /** false = metadata only (no body_md / meta). Default: full content. */
+  full?: boolean;
 }): Promise<{ items: LearningResource[]; error?: string }> {
   try {
     if (!opts.skipAuthCheck) {
@@ -188,7 +287,16 @@ export async function listResources(opts: {
       }
     }
 
-    let q = supabase.from("learning_resources").select("*").order("sort_order", {
+    // The admin console (skipAuthCheck, drafts included) reads the admin-only view,
+    // which has every column. Everyone else reads the light columns.
+    const useAdminView = Boolean(opts.skipAuthCheck) && !opts.publishedOnly;
+    const table = useAdminView ? "learning_resources_admin" : "learning_resources";
+    const cols = useAdminView ? "*" : LIGHT_COLUMNS;
+
+    // The PostgREST builder types cannot follow a runtime column list, so the
+    // builders are loosely typed and the results are cast to RowsResult.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let q: any = supabase.from(table).select(cols).order("sort_order", {
       ascending: true,
     });
 
@@ -221,14 +329,17 @@ export async function listResources(opts: {
     }
     if (opts.publishedOnly) q = q.eq("published", true);
 
-    let { data, error } = await q;
+    const first = (await q) as RowsResult;
+    let data = first.data;
+    let error = first.error;
 
     // If PostgREST rejected because of a corrupt/invalid JWT token, retry with clean anonymous client
     if (error && isCryptoOrTokenError(error.message)) {
       cleanCorruptAuthTokens();
       try {
         const anon = getAnonSupabaseClient();
-        let retryQ = anon.from("learning_resources").select("*").order("sort_order", {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        let retryQ: any = anon.from(table).select(cols).order("sort_order", {
           ascending: true,
         });
         if (opts.scopePath) {
@@ -259,7 +370,7 @@ export async function listResources(opts: {
         }
         if (opts.publishedOnly) retryQ = retryQ.eq("published", true);
 
-        const retryRes = await retryQ;
+        const retryRes = (await retryQ) as RowsResult;
         if (retryRes.data && retryRes.data.length > 0) {
           data = retryRes.data;
           error = null;
@@ -275,9 +386,10 @@ export async function listResources(opts: {
     // Fallback: If no items found for an ECE course, search by course slug
     if ((!data || data.length === 0) && eceMatch) {
       const courseSlug = eceMatch[2];
-      let fallbackQ = supabase
-        .from("learning_resources")
-        .select("*")
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      let fallbackQ: any = supabase
+        .from(table)
+        .select(cols)
         .ilike("scope_path", `%${courseSlug}%`)
         .order("sort_order", { ascending: true });
 
@@ -288,14 +400,15 @@ export async function listResources(opts: {
       }
       if (opts.publishedOnly) fallbackQ = fallbackQ.eq("published", true);
 
-      let fallbackRes = await fallbackQ;
+      let fallbackRes = (await fallbackQ) as RowsResult;
       if (fallbackRes.error && isCryptoOrTokenError(fallbackRes.error.message)) {
         cleanCorruptAuthTokens();
         try {
           const anon = getAnonSupabaseClient();
-          let anonFallbackQ = anon
-            .from("learning_resources")
-            .select("*")
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          let anonFallbackQ: any = anon
+            .from(table)
+            .select(cols)
             .ilike("scope_path", `%${courseSlug}%`)
             .order("sort_order", { ascending: true });
           if (opts.hub === "short-notes") {
@@ -304,7 +417,7 @@ export async function listResources(opts: {
             anonFallbackQ = anonFallbackQ.eq("hub", opts.hub);
           }
           if (opts.publishedOnly) anonFallbackQ = anonFallbackQ.eq("published", true);
-          fallbackRes = await anonFallbackQ;
+          fallbackRes = (await anonFallbackQ) as RowsResult;
         } catch {
           /* ignore */
         }
@@ -315,8 +428,13 @@ export async function listResources(opts: {
       }
     }
 
-    // Server-side API fallback: if client queries returned 0 items or errored, fetch via same-origin route
-    if ((!data || data.length === 0 || error) && typeof window !== "undefined") {
+    // Server-side API fallback: if client queries returned 0 items or errored, fetch via same-origin route.
+    // The route returns metadata only; full content is filled in through open_resource() below.
+    if (
+      (!data || data.length === 0 || error) &&
+      typeof window !== "undefined" &&
+      !useAdminView
+    ) {
       try {
         const params = new URLSearchParams();
         if (opts.scopePath) params.set("scopePath", opts.scopePath);
@@ -327,7 +445,10 @@ export async function listResources(opts: {
         if (apiRes.ok) {
           const json = await apiRes.json();
           if (Array.isArray(json?.items) && json.items.length > 0) {
-            return { items: json.items };
+            const apiItems = json.items as LearningResource[];
+            return {
+              items: opts.full === false ? apiItems : await hydrateContent(apiItems),
+            };
           }
         }
       } catch {
@@ -372,16 +493,18 @@ export async function listResources(opts: {
       }
     }
 
-    return {
-      items: (data || []).map((r) => {
-        const item = rowToResource(r as Record<string, unknown>);
-        if (eceMatch && opts.scopePath) {
-          item.scopePath = opts.scopePath;
-          item.packageId = eceMatch[1] === "sem-1" ? "ece-y3-sem-1" : "ece-y3-sem-2";
-        }
-        return item;
-      }),
-    };
+    const mapped = (data || []).map((r) => {
+      const item = rowToResource(r);
+      if (eceMatch && opts.scopePath) {
+        item.scopePath = opts.scopePath;
+        item.packageId = eceMatch[1] === "sem-1" ? "ece-y3-sem-1" : "ece-y3-sem-2";
+      }
+      return item;
+    });
+
+    // The admin view already carries every column; students get content via open_resource().
+    if (useAdminView || opts.full === false) return { items: mapped };
+    return { items: await hydrateContent(mapped) };
   } catch (e) {
     const msg = e instanceof Error ? e.message : "Failed";
     if (isCryptoOrTokenError(msg)) {
@@ -400,38 +523,12 @@ export async function listResources(opts: {
 
 export async function getResourceById(
   id: string
-): Promise<{ item?: LearningResource; error?: string }> {
-  try {
-    let { data, error } = await supabase
-      .from("learning_resources")
-      .select("*")
-      .eq("id", id)
-      .maybeSingle();
-
-    if (error && isCryptoOrTokenError(error.message)) {
-      cleanCorruptAuthTokens();
-      try {
-        const anon = getAnonSupabaseClient();
-        const retryRes = await anon
-          .from("learning_resources")
-          .select("*")
-          .eq("id", id)
-          .maybeSingle();
-        if (retryRes.data) {
-          data = retryRes.data;
-          error = null;
-        }
-      } catch {
-        /* ignore */
-      }
-    }
-
-    if (error) return { error: "Unable to load item." };
-    if (!data) return {};
-    return { item: rowToResource(data as Record<string, unknown>) };
-  } catch {
-    return { error: "Unable to load item." };
-  }
+): Promise<{
+  item?: LearningResource;
+  gate?: "package_required" | "coming_soon";
+  error?: string;
+}> {
+  return openResource(id);
 }
 
 export async function upsertResource(
