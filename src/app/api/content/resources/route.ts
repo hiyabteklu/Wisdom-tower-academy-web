@@ -3,6 +3,19 @@ import { createClient } from "@supabase/supabase-js";
 
 export const dynamic = "force-dynamic";
 
+/**
+ * METADATA ONLY (titles, chapters, storage_path, item_count).
+ *
+ * Since 2026-10-20 (app change S4) the database no longer lets the public or
+ * signed-in roles read learning_resources.body_md / meta directly. Full content
+ * is served only by the database function open_resource(), which applies the
+ * content locks. This route uses the service key, so it must NEVER return
+ * body_md / meta: that would hand every locked note, flashcard deck and exam
+ * to anyone who calls this URL.
+ */
+const LIGHT_COLUMNS =
+  "id,package_id,scope_path,hub,title,chapter,sort_order,content_type,storage_path,published,created_at,item_count";
+
 function getServiceOrAnonClient() {
   const url =
     process.env.NEXT_PUBLIC_SUPABASE_URL?.trim() ||
@@ -30,7 +43,7 @@ export async function GET(req: NextRequest) {
     const publishedOnly = searchParams.get("publishedOnly") !== "false";
 
     const supabase = getServiceOrAnonClient();
-    let q = supabase.from("learning_resources").select("*").order("sort_order", {
+    let q = supabase.from("learning_resources").select(LIGHT_COLUMNS).order("sort_order", {
       ascending: true,
     });
 
@@ -72,7 +85,7 @@ export async function GET(req: NextRequest) {
       const courseSlug = eceMatch[2];
       let fallbackQ = supabase
         .from("learning_resources")
-        .select("*")
+        .select(LIGHT_COLUMNS)
         .ilike("scope_path", `%${courseSlug}%`)
         .order("sort_order", { ascending: true });
 
@@ -112,8 +125,10 @@ export async function GET(req: NextRequest) {
         sortOrder: Number(row.sort_order ?? 0),
         contentType: row.content_type,
         storagePath: row.storage_path ? String(row.storage_path) : null,
-        bodyMd: row.body_md != null ? String(row.body_md) : null,
-        meta: (row.meta as Record<string, unknown>) || {},
+        // Heavy content is fetched per item through open_resource() (lock-checked).
+        bodyMd: null,
+        meta: {},
+        itemCount: row.item_count != null ? Number(row.item_count) : null,
         published: Boolean(row.published),
         createdAt: row.created_at ? String(row.created_at) : undefined,
       };
