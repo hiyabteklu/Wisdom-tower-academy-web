@@ -6,6 +6,7 @@ import {
 } from "@/lib/notifications";
 import { requireAdmin } from "@/lib/admin-auth";
 import { createServiceClient } from "@/lib/supabase-server";
+import { fillFirstName } from "@/lib/welcome-notification";
 
 export const dynamic = "force-dynamic";
 
@@ -18,8 +19,13 @@ export const dynamic = "force-dynamic";
 // values are ignored) and every notice addressed to that student is returned. Without a token the old
 // ?userId=&email= behaviour stays (the app does not send a token yet), limited to admin / material /
 // contest notices. Known gap: see WEBSITE_CHANGES.md section 3 (the app should send its token).
+//
+// 2026-10-23: `{first_name}` in a notice title/body is filled from the verified student's profile name;
+// without a token the name is unknown, so the token is dropped ("Hey, you made it").
 
-async function verifiedStudent(req: NextRequest): Promise<{ id: string; email: string | null } | null> {
+async function verifiedStudent(
+  req: NextRequest
+): Promise<{ id: string; email: string | null; firstName: string | null } | null> {
   const header = req.headers.get("authorization") ?? "";
   const match = /^Bearer\s+(.+)$/i.exec(header.trim());
   if (!match) return null;
@@ -27,7 +33,12 @@ async function verifiedStudent(req: NextRequest): Promise<{ id: string; email: s
   if (!client) return null;
   const { data, error } = await client.auth.getUser(match[1].trim());
   if (error || !data.user) return null;
-  return { id: data.user.id, email: data.user.email ?? null };
+  const meta = (data.user.user_metadata ?? {}) as Record<string, unknown>;
+  const rawName = [meta.first_name, meta.full_name, meta.name].find(
+    (v) => typeof v === "string" && v.trim().length > 0
+  );
+  const firstName = typeof rawName === "string" ? rawName.trim().split(/\s+/)[0] : null;
+  return { id: data.user.id, email: data.user.email ?? null, firstName };
 }
 
 export async function GET(req: NextRequest) {
@@ -48,7 +59,12 @@ export async function GET(req: NextRequest) {
     const items = me
       ? await listNotificationsForUser(me.id, me.email, true)
       : await listNotificationsForUser(userId, email, false);
-    return NextResponse.json({ ok: true, notifications: items });
+    const personal = items.map((n) => ({
+      ...n,
+      title: fillFirstName(n.title, me?.firstName),
+      body: fillFirstName(n.body, me?.firstName),
+    }));
+    return NextResponse.json({ ok: true, notifications: personal });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : "Failed to load notifications";
     return NextResponse.json({ ok: false, error: message }, { status: 500 });

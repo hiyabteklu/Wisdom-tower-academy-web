@@ -1,6 +1,12 @@
 import { supabase } from "@/lib/supabase";
 import { createServiceClient } from "@/lib/supabase-server";
 import { sendFcmPushToTokens, type FcmPushPayload } from "@/lib/firebase-admin";
+import {
+  WELCOME_BODY,
+  WELCOME_CONTENT,
+  WELCOME_NOTIFICATION_ID,
+  WELCOME_TITLE,
+} from "@/lib/welcome-notification";
 
 // 2026-10-15 (notifications v2, R2): "contest" added. The three categories of the owner's order are
 // admin (announcement), material and contest; "payment" and "general" stay for old rows.
@@ -32,14 +38,16 @@ export type DeviceTokenRecord = {
 const localDeviceTokens = new Map<string, DeviceTokenRecord>();
 const localNotifications: NotificationItem[] = [
   {
-    id: "notif_welcome_system",
-    title: "Welcome to Wisdom Tower Academy",
-    body: "Explore comprehensive learning tracks, solved model exams, and lecture notes. All content is unlocked for registered scholars!",
+    // 2026-10-23: warm welcome with rich content (paragraphs, callout, dividers). Text lives in welcome-notification.ts.
+    id: WELCOME_NOTIFICATION_ID,
+    title: WELCOME_TITLE,
+    body: WELCOME_BODY,
     type: "admin",
     target: "all",
-    url: "/learning",
+    url: `/notifications?open=${WELCOME_NOTIFICATION_ID}`,
     createdAt: new Date(Date.now() - 3600000).toISOString(),
     read: false,
+    metadata: { content: WELCOME_CONTENT },
   },
 ];
 
