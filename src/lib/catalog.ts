@@ -1,6 +1,7 @@
 /**
  * Admin catalog — Supabase catalog_items + static fallback from packages.ts
- * Static priceEtb / includes / description always win for known package ids.
+ * PRICE (owner order 2026-10-23): the price saved in the admin dashboard (catalog_items.price_etb) WINS when it is above 0;
+ * the static packages.ts price is only the fallback (no row, or price 0). Static includes / description still win for known ids.
  */
 import { supabase } from "@/lib/supabase";
 import { invalidate } from "@/lib/swr-cache";
@@ -52,13 +53,16 @@ export function getRuntimeCatalog(): AcademyPackage[] | null {
   return runtimeCatalog;
 }
 
-/** Prefer static price, includes, and description for packages defined in packages.ts */
+/**
+ * Prefer static includes and description for packages defined in packages.ts.
+ * Price: the dashboard price (already in pkg.priceEtb) wins when above 0, else the static price.
+ */
 function applyStaticPrice(pkg: AcademyPackage): AcademyPackage {
   const staticPkg = getStaticPackage(pkg.id);
   if (!staticPkg) return pkg;
   return {
     ...pkg,
-    priceEtb: staticPkg.priceEtb,
+    priceEtb: pkg.priceEtb > 0 ? pkg.priceEtb : staticPkg.priceEtb,
     includes: staticPkg.includes.length ? staticPkg.includes : pkg.includes,
     description: staticPkg.description?.trim() ? staticPkg.description : pkg.description,
   };

@@ -3,7 +3,7 @@
 import { use, useEffect, useState } from "react";
 import Link from "next/link";
 import { getPackage, formatEtb } from "@/data/packages";
-import { getPackageResolved } from "@/lib/catalog";
+import { getPackageResolved, listSellablePackages } from "@/lib/catalog";
 import { isPackagePurchasable } from "@/data/content-availability";
 import { CloudUpload, ArrowLeft, Gift, BookOpen } from "lucide-react";
 import { IS_FREE_MODE } from "@/lib/ownership";
@@ -20,7 +20,16 @@ export default function CheckoutPage({
   const [ready, setReady] = useState(false);
 
   useEffect(() => {
-    setReady(true);
+    // Load the admin catalog first so the checkout shows the dashboard price (same price as the packages page).
+    let cancelled = false;
+    listSellablePackages()
+      .catch(() => undefined)
+      .finally(() => {
+        if (!cancelled) setReady(true);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   if (!ready) {
