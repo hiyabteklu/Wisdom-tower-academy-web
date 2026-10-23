@@ -39,14 +39,6 @@ export const WELCOME_CONTENT: NotificationContent = {
       ],
     },
     { t: "divider" },
-    {
-      t: "p",
-      runs: [
-        { text: "Thank you for giving us " },
-        { text: "a place in your journey", hl: true },
-        { text: ". We're glad you're here." },
-      ],
-    },
     { t: "p", runs: [{ text: "\u2014 Wisdom Tower Academy", b: true }] },
   ],
 };
