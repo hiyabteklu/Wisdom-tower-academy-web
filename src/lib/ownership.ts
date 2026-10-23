@@ -15,15 +15,20 @@ export type OwnershipMap = Set<string>;
 
 /**
  * MASTER FEATURE FLAG: FREE MODE (for Play Store review)
- * When true:
+ * Switched from Vercel, no code push: set the environment variable NEXT_PUBLIC_PAID_MODE to "true"
+ * (Vercel > Project > Settings > Environment Variables) and redeploy. Anything else, or the variable
+ * missing, keeps FREE MODE on (safe default for Play Store review).
+ * NEXT_PUBLIC_ is required so the value reaches the browser; it is fixed at build time, so a redeploy
+ * is needed after changing it.
+ * When free mode is on (true):
  * - All authenticated/signed-in users receive 100% full content access to all learning hubs,
  *   books, notes, questions, and exams without payment walls or ownership requirements.
  * - Guest users MUST sign in to access protected content (navigation/previews remain public).
  * - All payment, purchase, price (ETB), checkout, and cart UI elements are hidden.
- * When false:
+ * When free mode is off (false):
  * - Original paid ownership and manual order verification logic resumes seamlessly.
  */
-export const IS_FREE_MODE = true;
+export const IS_FREE_MODE = process.env.NEXT_PUBLIC_PAID_MODE !== "true";
 
 /** Packages unlocked automatically for every signed-in user (no payment). */
 export const FREE_FOR_REGISTERED_PACKAGE_IDS = [
