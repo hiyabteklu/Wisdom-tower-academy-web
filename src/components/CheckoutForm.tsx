@@ -66,7 +66,8 @@ function BankLogo({
   );
 }
 
-const AUTO_VERIFY_METHODS: PaymentMethodId[] = ["telebirr", "cbe", "abyssinia"];
+// Automatic approval is OFF (owner order 2026-10-23): every order goes to an admin.
+const AUTO_VERIFY_METHODS: PaymentMethodId[] = [];
 
 export default function CheckoutForm({ packageId, packageIds }: Props) {
   const pkgs = useMemo(() => {
@@ -196,93 +197,6 @@ export default function CheckoutForm({ packageId, packageIds }: Props) {
       createdAt: new Date().toISOString(),
     };
 
-    if (confirmMode === "details" && canAutoVerify) {
-      if (!txRef.trim()) {
-        setError("Enter the transaction reference from your SMS or receipt.");
-        setSubmitting(false);
-        return;
-      }
-
-      try {
-        const res = await fetch("/api/verify-payment", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            orderId: orderRef,
-            packageId: pkg.id,
-            packageName: displayName,
-            packageIds: allPackageIds,
-            amountEtb: totalEtb,
-            paymentMethod: method,
-            transactionRef: txRef.trim(),
-            studentName: name.trim(),
-            phone: phone.trim(),
-            email: email.trim() || undefined,
-            note: [note.trim(), multiNote].filter(Boolean).join(" | ") || undefined,
-            userId,
-          }),
-        });
-        const data = (await res.json()) as {
-          ok?: boolean;
-          verified?: boolean;
-          error?: string;
-          message?: string;
-          code?: string;
-        };
-
-        if (data.code === "NOT_CONFIGURED" || res.status === 503) {
-          await saveOrder({
-            ...orderBase,
-            status: "pending_verification",
-            transactionRef: txRef.trim(),
-            note: [note.trim(), multiNote].filter(Boolean).join(" | ") || undefined,
-          });
-          clearSelectedFromCart();
-          setDone(true);
-          setSubmitting(false);
-          return;
-        }
-
-        if (data.verified) {
-          await saveOrder({
-            ...orderBase,
-            status: "verified",
-            transactionRef: txRef.trim(),
-            note: [note.trim(), multiNote].filter(Boolean).join(" | ") || undefined,
-            verifiedAt: new Date().toISOString(),
-            verifiedBy: "verify.et",
-          });
-          clearSelectedFromCart();
-          setAutoVerified(true);
-          setDone(true);
-          setSubmitting(false);
-          return;
-        }
-
-        await saveOrder({
-          ...orderBase,
-          status: "pending_verification",
-          transactionRef: txRef.trim(),
-          note:
-            [note.trim(), multiNote, data.error || data.message].filter(Boolean).join(" | ") ||
-            undefined,
-        });
-        clearSelectedFromCart();
-        setInfo(
-          data.error ||
-            data.message ||
-            "We could not confirm automatically. Your order is pending admin review."
-        );
-        setDone(true);
-        setSubmitting(false);
-        return;
-      } catch {
-        setError("Verification request failed. Try again or upload a receipt.");
-        setSubmitting(false);
-        return;
-      }
-    }
-
     let receiptUrl: string | undefined;
     if (confirmMode === "receipt") {
       if (!receiptFile) {
@@ -303,6 +217,7 @@ export default function CheckoutForm({ packageId, packageIds }: Props) {
       return;
     }
 
+    // Always saved as pending: only an admin can approve it.
     const order: ManualOrder = {
       ...orderBase,
       status: "pending_verification",
