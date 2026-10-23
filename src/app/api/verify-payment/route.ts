@@ -5,7 +5,7 @@ import {
   mapPaymentMethodToBank,
   verifyTransaction,
 } from "@/lib/verify-et";
-import type { PaymentMethodId } from "@/data/packages";
+import { getPackage, type PaymentMethodId } from "@/data/packages";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -35,6 +35,92 @@ type Body = {
   dryRun?: boolean;
 };
 
+type PriceResult =
+  | { ok: true; totalEtb: number; ids: string[] }
+  | { ok: false; error: string; code: string; status: number };
+
+/**
+ * The price is decided HERE, never by the browser (P6, owner approved 2026-10-23).
+ * Same rule as the checkout page: the admin catalog price (catalog_items.price_etb) wins when above 0,
+ * the static packages.ts price is used only when there is no catalog row or its price is 0.
+ * Any unknown package, or a price that cannot be read, returns an error and nothing is auto-verified.
+ */
+async function serverPrice(body: Body): Promise<PriceResult> {
+  const raw =
+    Array.isArray(body.packageIds) && body.packageIds.length > 0
+      ? body.packageIds
+      : body.packageId
+        ? [body.packageId]
+        : [];
+  const ids = Array.from(
+    new Set(raw.map((s) => String(s || "").trim()).filter(Boolean))
+  );
+
+  if (ids.length === 0 || ids.length > 12) {
+    return {
+      ok: false,
+      error: "packageId or packageIds is required",
+      code: "BAD_PACKAGES",
+      status: 400,
+    };
+  }
+
+  const db = adminClient();
+  if (!db) {
+    return {
+      ok: false,
+      error: "Price check is not available right now. Your order will be reviewed by an admin.",
+      code: "PRICE_UNAVAILABLE",
+      status: 503,
+    };
+  }
+
+  const { data, error } = await db
+    .from("catalog_items")
+    .select("id, price_etb, active")
+    .in("id", ids);
+
+  if (error) {
+    console.warn("[verify-payment] catalog read", error.message);
+    return {
+      ok: false,
+      error: "Price check is not available right now. Your order will be reviewed by an admin.",
+      code: "PRICE_UNAVAILABLE",
+      status: 503,
+    };
+  }
+
+  const rows = new Map<string, { price: number; active: boolean }>();
+  for (const r of (data || []) as { id: string; price_etb: number | null; active: boolean | null }[]) {
+    rows.set(r.id, { price: Number(r.price_etb) || 0, active: r.active !== false });
+  }
+
+  let total = 0;
+  for (const id of ids) {
+    const row = rows.get(id);
+    if (row && !row.active) {
+      return {
+        ok: false,
+        error: `Package ${id} is not for sale.`,
+        code: "PACKAGE_NOT_FOR_SALE",
+        status: 400,
+      };
+    }
+    const price = row && row.price > 0 ? row.price : getPackage(id)?.priceEtb ?? 0;
+    if (!Number.isFinite(price) || price <= 0) {
+      return {
+        ok: false,
+        error: `Package ${id} has no price.`,
+        code: "UNKNOWN_PACKAGE",
+        status: 400,
+      };
+    }
+    total += price;
+  }
+
+  return { ok: true, totalEtb: total, ids };
+}
+
 export async function POST(req: NextRequest) {
   if (!isVerifyEtConfigured()) {
     return NextResponse.json(
@@ -57,7 +143,6 @@ export async function POST(req: NextRequest) {
 
   const method = body.paymentMethod;
   const ref = (body.transactionRef || "").trim();
-  const amountEtb = Number(body.amountEtb);
   const orderId = (body.orderId || "").trim();
 
   if (!method || !ref) {
@@ -79,10 +164,21 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  // The amount sent by the browser is IGNORED. The expected amount is the server price.
+  const price = await serverPrice(body);
+  if (!price.ok) {
+    return NextResponse.json(
+      { ok: false, error: price.error, code: price.code },
+      { status: price.status }
+    );
+  }
+  const amountEtb = price.totalEtb;
+  const packageIds = price.ids;
+
   const result = await verifyTransaction({
     method,
     reference: ref,
-    expectedAmountEtb: Number.isFinite(amountEtb) ? amountEtb : undefined,
+    expectedAmountEtb: amountEtb,
     idempotencyKey: orderId ? `order-${orderId}` : undefined,
   });
 
@@ -98,7 +194,7 @@ export async function POST(req: NextRequest) {
     });
   }
 
-  if (orderId && body.packageId && body.packageName && Number.isFinite(amountEtb)) {
+  if (orderId && body.packageId && body.packageName) {
     const db = adminClient();
     const status = result.verified ? "verified" : "pending_verification";
     const now = new Date().toISOString();
@@ -139,13 +235,7 @@ export async function POST(req: NextRequest) {
       }
 
       if (result.verified) {
-        const ids =
-          Array.isArray(body.packageIds) && body.packageIds.length > 0
-            ? body.packageIds
-            : body.packageId
-              ? [body.packageId]
-              : [];
-        for (const pid of ids) {
+        for (const pid of packageIds) {
           const enroll: Record<string, unknown> = {
             order_id: orderId,
             package_id: pid,
