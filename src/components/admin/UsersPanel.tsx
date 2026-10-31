@@ -12,6 +12,7 @@ import {
   grantAllPackages,
   ALL_PACKAGES_ID,
 } from "@/lib/access-grants";
+import { normalizePhone, phoneToAuthEmail } from "@/lib/authIdentity";
 import { academyPackages, formatEtb } from "@/data/packages";
 import {
   Users,
@@ -61,11 +62,29 @@ import {
  * close the second). "Grant New Package" in the history therefore swaps the content of the open sheet.
  * Search text, filters, database calls (listProfiles, getStudentDetail, grantAccess, grantAllPackages),
  * the CSV export and every text are unchanged.
+ *
+ * 2026-10-31 (phone-student parity): students who registered with a phone number have an EMPTY profiles.email;
+ * their real login is the synthetic address p<digits>@phone.wisdomtower.app (authIdentity.ts). The grant form,
+ * the history lookup (grants + orders by e-mail) and the user-id link all need an e-mail, so they silently did
+ * nothing for phone students. accountEmail() now falls back to the synthetic address built from the phone, the
+ * same address their orders and enrollments already use. The search box also matches the phone number.
  */
 
 type Props = {
   adminEmail?: string;
 };
+
+/**
+ * The e-mail an account really signs in with: the profile e-mail, or for phone-registered students the
+ * synthetic p<digits>@phone.wisdomtower.app address. Null only when the student has neither.
+ */
+function accountEmail(u: ProfileRow | null): string | null {
+  if (!u) return null;
+  const real = (u.email || "").trim();
+  if (real) return real;
+  const digits = normalizePhone(u.phone || "");
+  return digits.length >= 9 ? phoneToAuthEmail(digits) : null;
+}
 
 export default function UsersPanel({ adminEmail = "admin@wisdomtower.tech" }: Props) {
   const [users, setUsers] = useState<ProfileRow[]>([]);
@@ -112,7 +131,7 @@ export default function UsersPanel({ adminEmail = "admin@wisdomtower.tech" }: Pr
     }
     let cancelled = false;
     setLoadingDetail(true);
-    getStudentDetail(inspectStudent.id, inspectStudent.email).then((detail) => {
+    getStudentDetail(inspectStudent.id, accountEmail(inspectStudent)).then((detail) => {
       if (!cancelled) {
         setInspectDetail(detail);
         setLoadingDetail(false);
@@ -162,21 +181,22 @@ export default function UsersPanel({ adminEmail = "admin@wisdomtower.tech" }: Pr
 
   const handleExecuteGrant = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!grantModalUser?.email) {
-      setToast("User has no email associated with account");
+    const targetEmail = accountEmail(grantModalUser);
+    if (!grantModalUser || !targetEmail) {
+      setToast("This student has no email or phone number on file");
       return;
     }
     setGrantBusy(true);
 
     if (selectedPackageId === ALL_PACKAGES_ID) {
       const res = await grantAllPackages({
-        email: grantModalUser.email,
+        email: targetEmail,
         grantedBy: adminEmail,
         note: grantNote || "Direct Admin Grant",
       });
       setGrantBusy(false);
       if (res.ok) {
-        setToast(`Granted full platform pass to ${grantModalUser.email} (${res.count} packages)`);
+        setToast(`Granted full platform pass to ${grantModalUser.email || grantModalUser.phone || targetEmail} (${res.count} packages)`);
         setGrantModalUser(null);
       } else {
         setToast(res.error || "Failed to grant all packages");
@@ -184,14 +204,14 @@ export default function UsersPanel({ adminEmail = "admin@wisdomtower.tech" }: Pr
     } else {
       const pkg = academyPackages.find((p) => p.id === selectedPackageId);
       const res = await grantAccess({
-        email: grantModalUser.email,
+        email: targetEmail,
         packageId: selectedPackageId,
         grantedBy: adminEmail,
         note: grantNote || "Direct Admin Grant",
       });
       setGrantBusy(false);
       if (res.ok) {
-        setToast(`Granted ${pkg?.name || selectedPackageId} to ${grantModalUser.email}`);
+        setToast(`Granted ${pkg?.name || selectedPackageId} to ${grantModalUser.email || grantModalUser.phone || targetEmail}`);
         setGrantModalUser(null);
       } else {
         setToast(res.error || "Failed to grant package");
@@ -204,13 +224,21 @@ export default function UsersPanel({ adminEmail = "admin@wisdomtower.tech" }: Pr
     return users.filter((u) => {
       // Search matching
       const q = searchQuery.toLowerCase().trim();
+      const qDigits = q.replace(/\D/g, "");
+      const phoneDigits = (u.phone || "").replace(/\D/g, "");
+      const matchPhone =
+        qDigits.length >= 4 &&
+        (phoneDigits.includes(qDigits) ||
+          // typed as 09xxxxxxxx or 9xxxxxxxx while the stored number is 251...
+          (qDigits.startsWith("0") && phoneDigits.includes(qDigits.slice(1))));
       const matchSearch =
         !q ||
         (u.full_name || "").toLowerCase().includes(q) ||
         (u.email || "").toLowerCase().includes(q) ||
         (u.student_id_number || "").toLowerCase().includes(q) ||
         (u.school_name || "").toLowerCase().includes(q) ||
-        (u.town_region || "").toLowerCase().includes(q);
+        (u.town_region || "").toLowerCase().includes(q) ||
+        matchPhone;
 
       // Stream matching
       const streamVal = (u.stream || "").toLowerCase();
@@ -292,7 +320,7 @@ export default function UsersPanel({ adminEmail = "admin@wisdomtower.tech" }: Pr
         <AdminSearch
           value={searchQuery}
           onChange={setSearchQuery}
-          placeholder="Search name, email, student ID, school, town"
+          placeholder="Search name, email, phone, student ID, school, town"
         />
 
         <div className="grid grid-cols-2 gap-2">
@@ -353,7 +381,7 @@ export default function UsersPanel({ adminEmail = "admin@wisdomtower.tech" }: Pr
                   <h4 className="truncate text-sm font-semibold text-white">{u.full_name || "Scholar"}</h4>
                   <p className="flex items-center gap-1 text-xs text-wisdom-muted">
                     <Mail className="h-3 w-3 shrink-0" />
-                    <span className="truncate">{u.email || "No email"}</span>
+                    <span className="truncate">{u.email || u.phone || "No email"}</span>
                   </p>
                 </div>
               </div>
@@ -433,14 +461,14 @@ export default function UsersPanel({ adminEmail = "admin@wisdomtower.tech" }: Pr
         {grantModalUser ? (
           <form id="grant-form" onSubmit={handleExecuteGrant} className="space-y-3">
             <p className="break-words text-lg font-bold text-white">
-              Unlock Materials for {grantModalUser.full_name || grantModalUser.email}
+              Unlock Materials for {grantModalUser.full_name || grantModalUser.email || grantModalUser.phone}
             </p>
 
             <AdminField label="Recipient Scholar">
               <AdminInput
                 type="text"
                 disabled
-                value={`${grantModalUser.full_name || "Scholar"} (${grantModalUser.email || "No email"})`}
+                value={`${grantModalUser.full_name || "Scholar"} (${grantModalUser.email || grantModalUser.phone || "No email or phone"})`}
               />
             </AdminField>
 
