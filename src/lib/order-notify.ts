@@ -4,6 +4,10 @@
  * Best effort: it never throws and never blocks the verification. It uses the admin's own session token to call
  * the admin-only route POST /api/notifications/send (legacy mode: type, target user id, url), which writes the
  * in-app notification and sends the push to every device registered for that user.
+ *
+ * Type is "admin" on purpose: the app does not send a login token when it lists notifications, and the server only
+ * shows a notice addressed to ONE student without a token for the types admin, material and contest (see
+ * PUBLIC_TARGETED_TYPES in lib/notifications.ts). A "payment" notice would be saved but never appear in the bell.
  */
 import { supabase } from "@/lib/supabase";
 
@@ -35,7 +39,7 @@ export async function notifyOrderVerified(opts: {
         body: pkg
           ? `Your package is unlocked 🔓 ${pkg} is ready. Enjoy your package 🫡`
           : "Your package is unlocked 🔓 Enjoy your package 🫡",
-        type: "payment",
+        type: "admin",
         target: userId,
         url: "/learning",
       }),
