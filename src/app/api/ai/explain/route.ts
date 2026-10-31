@@ -10,6 +10,12 @@ const FALLBACK = "Wisdom Tower AI is currently unavailable.";
 
 const PER_ATTEMPT_MS = 7000;
 
+/**
+ * Bump this when the tutor prompt changes on purpose: every question answer cached under the old version is
+ * then ignored and asked again once. (Editing a question does NOT need a bump: see makeContextKey.)
+ */
+const PROMPT_VERSION = "v2";
+
 const GROQ_MODELS = [
   process.env.AI_EXPLAIN_MODEL,
   "llama-3.3-70b-versatile",
@@ -35,15 +41,45 @@ function errMsg(e: unknown) {
   return e instanceof Error ? e.message.slice(0, 300) : String(e).slice(0, 300);
 }
 
-/** Stable cache key for identical AI requests (shared across users). */
+/** Collapse whitespace so a harmless re-format of a question does not look like a change. */
+function norm(v: unknown, max: number): string {
+  return String(v ?? "").replace(/\s+/g, " ").trim().slice(0, max);
+}
+
+/**
+ * Cache key shared across ALL students.
+ *
+ * Question explanations: the key is a fingerprint of the CONTENT of the question (text, the choices in their
+ * order, the correct answer, the official solution). It deliberately ignores the student's own pick and the
+ * resource id, so every student asking about the same question gets the same stored answer.
+ * Because the key IS the content, a question that is edited or replaced produces a different key, so the old
+ * answer is never served for it and the AI is asked again. Nothing has to be deleted by hand.
+ *
+ * Summaries / notes keep the original key shape on purpose so the rows already stored keep working.
+ */
 function makeContextKey(body: Record<string, unknown>): string {
   const mode = String(body.mode || "notes");
+
+  if (mode === "question") {
+    const choices = Array.isArray(body.choices)
+      ? body.choices.map((c) => norm(c, 1000))
+      : [];
+    const payload = JSON.stringify({
+      v: PROMPT_VERSION,
+      mode,
+      text: norm(body.text || body.question, 8000),
+      choices,
+      correct: norm(body.correctAnswer, 1000),
+      solution: norm(body.solution, 3000),
+    });
+    return createHash("sha256").update(payload).digest("hex").slice(0, 56);
+  }
+
   const payload = JSON.stringify({
     mode,
     text: String(body.text || body.question || "").slice(0, 8000),
     solution: body.solution ? String(body.solution).slice(0, 2000) : "",
     choices: Array.isArray(body.choices) ? body.choices.map(String) : [],
-    // Include student answer so different choices get different tutor replies
     studentAnswer: body.studentAnswer ? String(body.studentAnswer) : "",
     correctAnswer: body.correctAnswer ? String(body.correctAnswer) : "",
     resourceId: body.resourceId ? String(body.resourceId) : "",
@@ -95,7 +131,7 @@ async function writeCache(opts: {
   const supabase = createServiceClient();
   if (!supabase) return;
   try {
-    // Prefer upsert on context_key (requires unique index: see SQL migration)
+    // Upsert on context_key (unique index ai_explanations_context_key_uidx exists)
     const row: Record<string, unknown> = {
       context_key: opts.contextKey,
       explanation: opts.explanation,
@@ -189,7 +225,6 @@ function buildMessages(body: Record<string, unknown>) {
   const text = String(body.text || body.question || "").slice(0, 8000);
   const solution = body.solution ? String(body.solution).slice(0, 3000) : "";
   const choices = Array.isArray(body.choices) ? body.choices.map(String) : [];
-  const studentAnswer = body.studentAnswer ? String(body.studentAnswer) : "";
   const correctAnswer = body.correctAnswer ? String(body.correctAnswer) : "";
 
   if (mode === "summarize" || mode === "notes") {
@@ -204,10 +239,12 @@ function buildMessages(body: Record<string, unknown>) {
     const choiceLines = choices
       .map((c, i) => `${String.fromCharCode(65 + i)}. ${c}`)
       .join("\n");
+    // The student's own pick is NOT part of the prompt: the answer is stored and shared by every student,
+    // so it explains the correct option and why each wrong option fails, for whoever asks.
     return {
       system:
-        "You are a patient tutor. Explain why the correct option is right and why common wrong options fail. Plain paragraphs, max ~180 words. Use LaTeX as \\(...\\) when needed.",
-      user: `Question:\n${text}\n\nChoices:\n${choiceLines || "(none)"}\n\nStudent answer: ${studentAnswer || "(not answered)"}\nCorrect answer: ${correctAnswer || solution || "(see solution)"}\n\nOfficial solution:\n${solution || "(none)"}`,
+        "You are a patient tutor. Explain why the correct option is right and why each wrong option fails. Plain paragraphs, max ~200 words. Use LaTeX as \\(...\\) when needed.",
+      user: `Question:\n${text}\n\nChoices:\n${choiceLines || "(none)"}\n\nCorrect answer: ${correctAnswer || solution || "(see solution)"}\n\nOfficial solution:\n${solution || "(none)"}`,
     };
   }
 
@@ -229,7 +266,7 @@ export async function POST(req: NextRequest) {
     const contextKey = makeContextKey(body);
     const resourceId = parseResourceUuid(body.resourceId);
 
-    // 1) Serve from DB cache when available
+    // 1) Serve from the shared database cache when this exact question/note was already answered
     const cached = await readCache(contextKey);
     if (cached) {
       return NextResponse.json({
@@ -245,8 +282,10 @@ export async function POST(req: NextRequest) {
     try {
       const result = await raceProviders(system, user);
 
-      // 2) Persist for everyone (same question / same notes)
-      void writeCache({
+      // 2) Persist for everyone. AWAITED on purpose: on Vercel the function can be frozen the moment the
+      // response is sent, so a fire-and-forget write (`void writeCache`) is often lost and the next student
+      // would hit the AI again.
+      await writeCache({
         contextKey,
         explanation: result.text,
         model: result.model,
@@ -263,6 +302,7 @@ export async function POST(req: NextRequest) {
       });
     } catch (e) {
       console.error("[ai/explain] all providers failed", errMsg(e));
+      // Never cached, and flagged so the app does not keep it on the phone either.
       return NextResponse.json({
         explanation: FALLBACK,
         fallback: true,
