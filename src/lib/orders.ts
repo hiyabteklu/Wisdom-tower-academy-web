@@ -5,6 +5,7 @@
 import type { PaymentMethodId } from "@/data/packages";
 import { supabase } from "@/lib/supabase";
 import { invalidate } from "@/lib/swr-cache";
+import { notifyOrderVerified } from "@/lib/order-notify";
 
 export type OrderStatus =
   | "pending_payment"
@@ -269,11 +270,15 @@ export async function listMyOrders(): Promise<ManualOrder[]> {
   }
 }
 
-/** Approve order + create enrollment(s) for single or multi-package cart */
+/**
+ * Approve order + create enrollment(s) for single or multi-package cart.
+ * 2026-10-31: after a successful approval the student gets an "unlocked" notification (in-app + push). That step
+ * is best effort: if it fails the order stays verified and `notified` is false.
+ */
 export async function verifyOrder(
   orderId: string,
   adminEmail: string
-): Promise<{ ok: boolean; error?: string }> {
+): Promise<{ ok: boolean; error?: string; notified?: boolean }> {
   try {
     const { data: order, error: fetchErr } = await supabase
       .from("orders")
@@ -320,7 +325,15 @@ export async function verifyOrder(
     invalidate("orders:mine");
     invalidate("notifications:list");
     invalidate("ownership");
-    return { ok: true };
+
+    const notify = await notifyOrderVerified({
+      userId: order.user_id ? String(order.user_id) : null,
+      packageName: order.package_name ? String(order.package_name) : null,
+    });
+    if (!notify.ok) {
+      console.warn("[orders] student notification not sent:", notify.error);
+    }
+    return { ok: true, notified: notify.ok };
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : "Failed" };
   }
