@@ -2,10 +2,26 @@
 
 import { useCallback, useEffect, useState, useMemo, type ReactNode } from "react";
 import { fetchAdminStats, type AdminStats } from "@/lib/admin-data";
-import { statusLabel } from "@/lib/orders";
+import {
+  listOrdersFromDb,
+  rejectOrder,
+  statusLabel,
+  verifyOrder,
+  type ManualOrder,
+} from "@/lib/orders";
+import { supabase } from "@/lib/supabase";
 import { formatEtb } from "@/data/packages";
 import BrandLoader from "@/components/BrandLoader";
-import { AdminCard, AdminChip, AdminChips, AdminEmpty, AdminPill, type AdminChipOption, type AdminIcon } from "@/components/admin/ui";
+import {
+  AdminCard,
+  AdminChip,
+  AdminChips,
+  AdminEmpty,
+  AdminPill,
+  AdminToast,
+  type AdminChipOption,
+  type AdminIcon,
+} from "@/components/admin/ui";
 import {
   Users,
   CreditCard,
@@ -18,6 +34,7 @@ import {
   Clock,
   AlertCircle,
   Award,
+  CheckCircle2,
 } from "lucide-react";
 
 /**
@@ -37,6 +54,11 @@ import {
  * (`ui.tsx`): gold icon chips on every card (the unused per-card accent colours and the never-passed `trend`
  * prop were dropped), kit cards, the kit filter chips (gold when active), the kit Refresh pill and the kit
  * empty state. Chart bar colours stay: they carry meaning (orders, revenue, payment rails, streams).
+ *
+ * 2026-10-31: NEW "Needs your approval" queue under Today's Pulse. Lists every order in status
+ * pending_verification (oldest first, red after 2 hours) with a one-tap Verify / Reject (second tap confirms).
+ * Verify uses verifyOrder(), which also notifies the student. Orders are read with listOrdersFromDb(), so the
+ * queue is not limited to the 10 recent orders in the stats.
  */
 
 type ActivityFilter = "all" | "order" | "enroll" | "inquiry" | "user";
@@ -48,6 +70,8 @@ const ACTIVITY_FILTERS: AdminChipOption<ActivityFilter>[] = [
   { id: "inquiry", label: "Inquiries" },
   { id: "user", label: "Scholars" },
 ];
+
+const URGENT_MS = 2 * 60 * 60 * 1000;
 
 function MetricCard({
   label,
@@ -115,16 +139,59 @@ export default function AnalyticsPanel() {
   const [loading, setLoading] = useState(true);
   const [activityFilter, setActivityFilter] = useState<ActivityFilter>("all");
 
+  // Approval queue
+  const [pendingOrders, setPendingOrders] = useState<ManualOrder[]>([]);
+  const [confirm, setConfirm] = useState<{ id: string; action: "verify" | "reject" } | null>(null);
+  const [busyOrderId, setBusyOrderId] = useState<string | null>(null);
+  const [toast, setToast] = useState("");
+
   const load = useCallback(async () => {
     setLoading(true);
-    const data = await fetchAdminStats();
+    const [data, orders] = await Promise.all([fetchAdminStats(), listOrdersFromDb()]);
     setStats(data);
+    setPendingOrders(
+      orders
+        .filter((o) => o.status === "pending_verification")
+        .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+    );
     setLoading(false);
   }, []);
 
   useEffect(() => {
     void load();
   }, [load]);
+
+  const handleOrderAction = async (order: ManualOrder, action: "verify" | "reject") => {
+    // First tap arms the button, second tap on the same button runs it.
+    if (!confirm || confirm.id !== order.id || confirm.action !== action) {
+      setConfirm({ id: order.id, action });
+      return;
+    }
+    setConfirm(null);
+    setBusyOrderId(order.id);
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
+    const adminEmail = session?.user?.email || "admin";
+
+    if (action === "verify") {
+      const res = await verifyOrder(order.id, adminEmail);
+      if (res.ok) {
+        setToast(
+          res.notified
+            ? `Verified ${order.id}. ${order.studentName} was notified.`
+            : `Verified ${order.id}. The student could not be notified, message them yourself.`
+        );
+      } else {
+        setToast(res.error || "Could not verify the order");
+      }
+    } else {
+      const res = await rejectOrder(order.id, adminEmail);
+      setToast(res.ok ? `Rejected ${order.id}.` : res.error || "Could not reject the order");
+    }
+    setBusyOrderId(null);
+    await load();
+  };
 
   const activityItems = useMemo(() => {
     if (!stats) return [];
@@ -232,6 +299,80 @@ export default function AnalyticsPanel() {
           </div>
         )}
       </div>
+
+      {/* Needs your approval */}
+      {pendingOrders.length > 0 && (
+        <div>
+          <CardHeader
+            icon={CheckCircle2}
+            title="Needs your approval"
+            meta={`${pendingOrders.length} waiting`}
+          />
+          <div className="space-y-2">
+            {pendingOrders.map((o) => {
+              const waitedMs = Date.now() - new Date(o.createdAt).getTime();
+              const urgent = waitedMs > URGENT_MS;
+              const busy = busyOrderId === o.id;
+              const verifyArmed = confirm?.id === o.id && confirm.action === "verify";
+              const rejectArmed = confirm?.id === o.id && confirm.action === "reject";
+              return (
+                <AdminCard key={o.id} className="space-y-2.5">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="break-words text-sm font-semibold text-white">{o.studentName}</p>
+                      <p className="mt-0.5 break-words text-xs text-wisdom-muted">
+                        {o.packageName} · {formatEtb(o.amountEtb)} · {o.paymentMethod || "bank"}
+                      </p>
+                      <p className="mt-0.5 break-all font-mono text-xs text-wisdom-muted">
+                        {o.id}
+                        {o.transactionRef ? ` · ref ${o.transactionRef}` : ""}
+                      </p>
+                    </div>
+                    <span
+                      className={`shrink-0 rounded-full border px-2.5 py-1 text-xs font-bold tabular-nums ${
+                        urgent
+                          ? "border-red-400/40 bg-red-500/20 text-red-300"
+                          : "border-white/10 bg-white/5 text-wisdom-muted"
+                      }`}
+                    >
+                      {timeAgo(o.createdAt)}
+                    </span>
+                  </div>
+
+                  {o.receiptUrl && (
+                    <a
+                      href={o.receiptUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="inline-flex min-h-[44px] items-center text-xs font-semibold text-cyan-300 underline"
+                    >
+                      View receipt
+                    </a>
+                  )}
+
+                  <div className="grid grid-cols-2 gap-2">
+                    <AdminPill
+                      type="button"
+                      disabled={busy}
+                      onClick={() => void handleOrderAction(o, "reject")}
+                    >
+                      {rejectArmed ? "Tap again to reject" : "Reject"}
+                    </AdminPill>
+                    <AdminPill
+                      type="button"
+                      tone="primary"
+                      disabled={busy}
+                      onClick={() => void handleOrderAction(o, "verify")}
+                    >
+                      {busy ? "Working..." : verifyArmed ? "Tap again to verify" : "Verify & unlock"}
+                    </AdminPill>
+                  </div>
+                </AdminCard>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       {/* Main KPI Grid */}
       <div className="grid grid-cols-2 gap-2">
@@ -440,6 +581,8 @@ export default function AnalyticsPanel() {
           )}
         </div>
       </div>
+
+      <AdminToast message={toast || null} onClose={() => setToast("")} />
     </div>
   );
 }
