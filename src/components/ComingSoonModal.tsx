@@ -9,9 +9,22 @@ type Props = {
   open: boolean;
   onClose: () => void;
   hubName?: string;
+  /** Optional wording overrides (defaults keep the standard Coming soon text) */
+  badge?: string;
+  title?: string;
+  body?: string;
+  buttonLabel?: string;
 };
 
-export default function ComingSoonModal({ open, onClose, hubName }: Props) {
+export default function ComingSoonModal({
+  open,
+  onClose,
+  hubName,
+  badge,
+  title,
+  body,
+  buttonLabel,
+}: Props) {
   const [mounted, setMounted] = useState(false);
 
   useEffect(() => {
@@ -72,14 +85,14 @@ export default function ComingSoonModal({ open, onClose, hubName }: Props) {
           </div>
 
           <p className="mb-2 inline-flex items-center gap-1.5 rounded-full border border-amber-400/25 bg-amber-500/10 px-3 py-1 text-[10px] font-bold uppercase tracking-wider text-amber-300">
-            Coming soon
+            {badge ?? "Coming soon"}
           </p>
 
           <h2
             id="coming-soon-title"
             className="font-display text-lg sm:text-2xl font-extrabold text-white tracking-tight mb-2 sm:mb-3"
           >
-            {COMING_SOON_TITLE}
+            {title ?? COMING_SOON_TITLE}
           </h2>
 
           {hubName && (
@@ -87,7 +100,7 @@ export default function ComingSoonModal({ open, onClose, hubName }: Props) {
           )}
 
           <p className="text-sm text-wisdom-muted leading-relaxed max-w-sm mx-auto mb-6">
-            {COMING_SOON_BODY}
+            {body ?? COMING_SOON_BODY}
           </p>
 
           <button
@@ -95,7 +108,7 @@ export default function ComingSoonModal({ open, onClose, hubName }: Props) {
             onClick={onClose}
             className="btn-accent min-h-[44px] w-full sm:w-auto px-6 py-2.5 text-sm"
           >
-            Got it: check back later
+            {buttonLabel ?? "Got it: check back later"}
           </button>
         </div>
       </div>
