@@ -1,17 +1,12 @@
-import { notFound } from "next/navigation";
-import {
-  getResource,
-  resourceHubs,
-  HUB_ALIASES,
-  type ResourceType,
-} from "@/data/academy";
+import { notFound, redirect } from "next/navigation";
 import CategoryBackButton from "@/components/CategoryBackButton";
 import AcademicResultSaver from "@/components/AcademicResultSaver";
 import HubContentView from "@/components/learning/HubContentView";
-import ResourceHubChips from "@/components/ResourceHubChips";
+import UatHubChips from "@/components/uat/UatHubChips";
+import { UAT_HUBS, getUatHub, uatLegacyRedirect } from "@/data/uat-hubs";
 
 export function generateStaticParams() {
-  return resourceHubs.map((r) => ({ resource: r.id }));
+  return UAT_HUBS.map((h) => ({ resource: h.slug }));
 }
 
 export default async function UatResourcePage({
@@ -19,14 +14,14 @@ export default async function UatResourcePage({
 }: {
   params: Promise<{ resource: string }>;
 }) {
-  const { resource: resourceId } = await params;
-  const resource = getResource(resourceId);
+  const { resource: slug } = await params;
 
-  if (!resource) notFound();
+  // Old generic-hub URLs (/academy/uat/exams, /academy/uat/short-notes, ...)
+  const legacy = uatLegacyRedirect(slug);
+  if (legacy) redirect(legacy);
 
-  const hub = (HUB_ALIASES[resource.id] || resource.id) as ResourceType;
-  const scopePath = "uat";
-  const trackerScopeId = `uat-${resource.id}`;
+  const hubDef = getUatHub(slug);
+  if (!hubDef) notFound();
 
   return (
     <div className="relative min-h-[75vh]">
@@ -39,33 +34,33 @@ export default async function UatResourcePage({
 
         <div className="mb-6">
           <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-emerald-400 mb-1">
-            UAT · Learning hub
+            UAT
           </p>
           <h1 className="font-display text-2xl sm:text-3xl font-extrabold tracking-tight mb-2">
-            <span className={resource.accent}>{resource.name}</span>
+            <span className={hubDef.accent}>{hubDef.name}</span>
           </h1>
-          <p className="text-sm text-wisdom-muted">{resource.description}</p>
+          <p className="text-sm text-wisdom-muted">{hubDef.description}</p>
         </div>
 
         <div className="mb-8">
           <AcademicResultSaver
-            scopeId={trackerScopeId}
-            scopeLabel={`UAT · ${resource.name}`}
-            accent={resource.accent}
-            scopePath={scopePath}
-            hub={hub}
+            scopeId={hubDef.trackerScopeId}
+            scopeLabel={`UAT · ${hubDef.name}`}
+            accent={hubDef.accent}
+            scopePath={hubDef.scopePath}
+            hub={hubDef.id}
           />
         </div>
 
         <HubContentView
-          scopePath={scopePath}
-          hub={hub}
+          scopePath={hubDef.scopePath}
+          hub={hubDef.id}
           packageId="uat"
-          accent={resource.accent}
-          trackerScopeId={trackerScopeId}
+          accent={hubDef.accent}
+          trackerScopeId={hubDef.trackerScopeId}
         />
 
-        <ResourceHubChips basePath="/academy/uat" activeId={resource.id} />
+        <UatHubChips activeSlug={hubDef.slug} />
       </div>
     </div>
   );

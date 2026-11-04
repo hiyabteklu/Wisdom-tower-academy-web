@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState, useCallback } from "react";
 import { useCachedQuery } from "@/hooks/useCachedQuery";
-import { resourceHubs } from "@/data/academy";
+import { resourceHubs, type ResourceHub } from "@/data/academy";
 import ResourceHubCard from "@/components/ResourceHubCard";
 import {
   getHubLockMode,
@@ -24,6 +24,11 @@ type Props = {
   packageId?: string;
   /** Optional scope path override (e.g. freshman/math-natural) */
   scopePath?: string;
+  /**
+   * Optional custom hub list (e.g. the 4 UAT hubs). A hub's slug, when set, is the URL segment;
+   * otherwise its id is used. Defaults to the generic six hubs.
+   */
+  hubs?: Array<ResourceHub & { slug?: string; imageFallback?: string }>;
 };
 
 function inferPackageAndScope(basePath: string): {
@@ -90,6 +95,7 @@ export default function ResourceHubGrid({
   basePath,
   packageId: packageIdProp,
   scopePath: scopePathProp,
+  hubs,
 }: Props) {
   const inferred = inferPackageAndScope(basePath);
   const packageId = packageIdProp || inferred.packageId;
@@ -196,17 +202,24 @@ export default function ResourceHubGrid({
     };
   }, [basePath, lockMode, unlockIds]);
 
+  const list: Array<ResourceHub & { slug?: string; imageFallback?: string }> =
+    hubs ?? resourceHubs;
+  const colsClass = list.length === 4 ? "lg:grid-cols-4" : "lg:grid-cols-3";
+
   return (
-    <div className="perspective-scene grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4 md:gap-5 stagger-children">
-      {resourceHubs.map((hub) => (
+    <div
+      className={`perspective-scene grid grid-cols-2 sm:grid-cols-2 ${colsClass} gap-3 sm:gap-4 md:gap-5 stagger-children`}
+    >
+      {list.map((hub) => (
         <ResourceHubCard
-          key={hub.id}
+          key={hub.slug ?? hub.id}
           hub={hub}
-          href={`${basePath}/${hub.id}`}
+          href={`${basePath}/${hub.slug ?? hub.id}`}
           owned={owned}
           lockMode={lockMode}
           purchasePackageId={purchasePackageId}
           itemCount={hubCounts ? (hubCounts[hub.id] ?? 0) : undefined}
+          imageFallback={hub.imageFallback}
         />
       ))}
     </div>

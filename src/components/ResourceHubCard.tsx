@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { ChevronRight } from "lucide-react";
 import type { ResourceHub } from "@/data/academy";
@@ -18,6 +18,8 @@ type Props = {
   purchasePackageId?: string;
   /** Number of published items in this hub */
   itemCount?: number;
+  /** Shown if hub.image fails to load (e.g. a placeholder until the real image is uploaded) */
+  imageFallback?: string;
 };
 
 export default function ResourceHubCard({
@@ -26,9 +28,24 @@ export default function ResourceHubCard({
   owned = false,
   lockMode = "open",
   purchasePackageId = "freshman",
+  imageFallback,
 }: Props) {
   const [soonOpen, setSoonOpen] = useState(false);
   const [buyOpen, setBuyOpen] = useState(false);
+  const imgRef = useRef<HTMLImageElement>(null);
+
+  const swapToFallback = useCallback(() => {
+    const el = imgRef.current;
+    if (!el || !imageFallback || el.dataset.fallback === "1") return;
+    el.dataset.fallback = "1";
+    el.src = imageFallback;
+  }, [imageFallback]);
+
+  // The image can fail before React hydrates, so onError alone would miss it.
+  useEffect(() => {
+    const el = imgRef.current;
+    if (el && el.complete && el.naturalWidth === 0) swapToFallback();
+  }, [swapToFallback]);
 
   const blocked = !owned && lockMode !== "open";
 
@@ -37,11 +54,13 @@ export default function ResourceHubCard({
       <div className="card-media-wrap aspect-video">
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img
+          ref={imgRef}
           src={hub.image}
           alt={hub.name}
           loading="lazy"
           decoding="async"
           fetchPriority="low"
+          onError={swapToFallback}
           className="absolute inset-0 h-full w-full object-cover transition-transform duration-500 ease-out group-hover:scale-[1.03]"
         />
       </div>

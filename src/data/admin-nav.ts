@@ -90,6 +90,57 @@ const entranceNode: AdminNavNode = {
   })),
 };
 
+/**
+ * UAT has 4 hubs (see src/data/uat-hubs.ts). A hub node's id must be the stored hub id
+ * (short-notes, exams, life-savers) because the editor chooses its fields from it.
+ * Tips and Revision Notes both store as short-notes, so Tips sits one folder deeper to
+ * keep sibling ids unique.
+ */
+const uatNode: AdminNavNode = {
+  id: "uat",
+  label: "UAT",
+  packageId: "uat",
+  useAppwrite: true,
+  children: [
+    {
+      id: "uat-tips",
+      label: "Tips",
+      packageId: "uat",
+      useAppwrite: true,
+      children: [
+        {
+          id: "short-notes",
+          label: "Tip articles",
+          packageId: "uat",
+          scopePath: "uat/tips",
+          useAppwrite: true,
+        },
+      ],
+    },
+    {
+      id: "short-notes",
+      label: "Revision Notes",
+      packageId: "uat",
+      scopePath: "uat",
+      useAppwrite: true,
+    },
+    {
+      id: "exams",
+      label: "Previous Exams",
+      packageId: "uat",
+      scopePath: "uat",
+      useAppwrite: true,
+    },
+    {
+      id: "life-savers",
+      label: "Resources",
+      packageId: "uat",
+      scopePath: "uat",
+      useAppwrite: true,
+    },
+  ],
+};
+
 export const ADMIN_CONTENT_TREE: AdminNavNode[] = [
   {
     id: "grades",
@@ -98,6 +149,7 @@ export const ADMIN_CONTENT_TREE: AdminNavNode[] = [
     children: gradeNodes,
   },
   entranceNode,
+  uatNode,
   {
     id: "freshman",
     label: "Freshman",

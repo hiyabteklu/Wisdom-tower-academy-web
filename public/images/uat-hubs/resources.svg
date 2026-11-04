@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" viewBox="0 0 1280 720">
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0b1a2e"/>
+      <stop offset="1" stop-color="#16314f"/>
+    </linearGradient>
+  </defs>
+  <rect width="1280" height="720" fill="url(#g)"/>
+  <rect x="40" y="40" width="1200" height="640" rx="24" fill="none" stroke="#fb7185" stroke-opacity="0.5" stroke-width="3" stroke-dasharray="14 12"/>
+  <text x="640" y="340" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="96" font-weight="700" fill="#ffffff">Resources</text>
+  <text x="640" y="410" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="32" fill="#9fb3c8">Placeholder, 16:9 (1280 x 720)</text>
+  <text x="640" y="462" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="26" fill="#fb7185">Upload public/images/uat-hubs/resources.jpg</text>
+</svg>

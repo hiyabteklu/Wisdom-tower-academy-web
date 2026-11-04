@@ -2,6 +2,8 @@ import CategoryBackButton from "@/components/CategoryBackButton";
 import BranchLeaderboard from "@/components/BranchLeaderboard";
 import CollapsibleProgress from "@/components/CollapsibleProgress";
 import ResourceHubGrid from "@/components/ResourceHubGrid";
+import UatContinueCard from "@/components/uat/UatContinueCard";
+import { UAT_FACTS, UAT_HUBS } from "@/data/uat-hubs";
 import { Award } from "lucide-react";
 
 export default function UatPage() {
@@ -14,8 +16,8 @@ export default function UatPage() {
       <div className="relative max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-6 sm:py-10 md:py-16">
         <CategoryBackButton fallback="/learning" />
 
-        {/* Header: Pathway name + icon only */}
-        <div className="mb-6 sm:mb-8 animate-fade-up">
+        {/* Header: pathway name + icon */}
+        <div className="mb-4 sm:mb-5 animate-fade-up">
           <div className="flex items-center gap-2.5 sm:gap-3">
             <span className="inline-flex h-9 w-9 sm:h-10 sm:w-10 items-center justify-center rounded-xl border border-emerald-400/30 bg-emerald-500/10 text-emerald-400 shrink-0">
               <Award className="w-5 h-5" />
@@ -28,17 +30,31 @@ export default function UatPage() {
           </div>
         </div>
 
-        {/* Leaderboard + Progress Tracker side-by-side */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 sm:gap-6 max-w-5xl mx-auto mb-8 sm:mb-10">
-          <div>
-            <BranchLeaderboard branchName="UAT" accent="text-emerald-400" />
+        <div className="max-w-5xl mx-auto">
+          {/* Exam facts */}
+          <ul className="flex flex-wrap gap-2 mb-4 sm:mb-5">
+            {UAT_FACTS.map((fact) => (
+              <li
+                key={fact}
+                className="rounded-full border border-white/12 bg-white/[0.04] px-3 py-1 text-xs font-medium text-slate-200"
+              >
+                {fact}
+              </li>
+            ))}
+          </ul>
+
+          {/* Main action */}
+          <div className="mb-4 sm:mb-5">
+            <UatContinueCard />
           </div>
-          <div>
+
+          {/* Progress, collapsed to one line */}
+          <div className="mb-6 sm:mb-8">
             <CollapsibleProgress
               scopeId="uat"
               scopeLabel="UAT"
               accent="text-emerald-400"
-              defaultOpen={true}
+              defaultOpen={false}
             />
           </div>
         </div>
@@ -50,7 +66,12 @@ export default function UatPage() {
           </p>
         </div>
 
-        <ResourceHubGrid basePath="/academy/uat" />
+        <ResourceHubGrid basePath="/academy/uat" hubs={UAT_HUBS} />
+
+        {/* Ranking sits below the content */}
+        <div className="max-w-5xl mx-auto mt-8 sm:mt-10">
+          <BranchLeaderboard branchName="UAT" accent="text-emerald-400" />
+        </div>
       </div>
     </div>
   );
