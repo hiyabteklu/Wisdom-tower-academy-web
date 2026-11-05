@@ -294,12 +294,12 @@ export async function listResources(opts: {
       if (opts.publishedOnly) fallbackQ = fallbackQ.eq("published", true);
 
       let fallbackRes = await fallbackQ;
-      if (fallbackRes.error && isCryptoOrTokenError(fallbackRes.error.message)) {
+      if (fallbackRes.error && isCryptoOrTokenError(fallbackRes.error.message) && !opts.adminView) {
         cleanCorruptAuthTokens();
         try {
           const anon = getAnonSupabaseClient();
           let anonFallbackQ = anon
-            .from("learning_resources")
+            .from(source)
             .select("*")
             .ilike("scope_path", `%${courseSlug}%`)
             .order("sort_order", { ascending: true });
