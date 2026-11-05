@@ -1,6 +1,7 @@
 /** Step-by-step admin navigation mirroring the public Academy structure. */
 
 import { freshmanSubjects } from "@/data/freshman";
+import { remedialSubjects } from "@/data/remedial";
 import { grades, resourceHubs } from "@/data/academy";
 import { subjectsForGrade } from "@/data/grade-subjects";
 import { specialPackages } from "@/data/special-packages";
@@ -141,6 +142,45 @@ const uatNode: AdminNavNode = {
   ],
 };
 
+const remedialNode: AdminNavNode = {
+  id: "remedial",
+  label: "Remedial",
+  packageId: "remedial",
+  useAppwrite: true,
+  children: remedialSubjects.map((sub) => ({
+    id: sub.id,
+    label: sub.name,
+    packageId: "remedial",
+    scopePath: `remedial/${sub.id}`,
+    useAppwrite: true,
+    children: resourceHubs.map((h) => ({
+      id: h.id,
+      label: h.name,
+      packageId: "remedial",
+      scopePath: `remedial/${sub.id}`,
+      useAppwrite: true,
+    })),
+  })),
+};
+
+/** Branch packages with one six-hub set at their package-level scope. */
+function packageHubsNode(packageId: string, label: string): AdminNavNode {
+  return {
+    id: packageId,
+    label,
+    packageId,
+    scopePath: packageId,
+    useAppwrite: true,
+    children: resourceHubs.map((h) => ({
+      id: h.id,
+      label: h.name,
+      packageId,
+      scopePath: packageId,
+      useAppwrite: true,
+    })),
+  };
+}
+
 export const ADMIN_CONTENT_TREE: AdminNavNode[] = [
   {
     id: "grades",
@@ -150,6 +190,10 @@ export const ADMIN_CONTENT_TREE: AdminNavNode[] = [
   },
   entranceNode,
   uatNode,
+  packageHubsNode("coc", "COC"),
+  packageHubsNode("gat", "GAT"),
+  packageHubsNode("exit-exam", "Exit Exam"),
+  remedialNode,
   {
     id: "freshman",
     label: "Freshman",
