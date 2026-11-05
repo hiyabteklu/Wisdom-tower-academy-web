@@ -99,7 +99,7 @@ export default function ContentPanel() {
   const loadItems = useCallback(async () => {
     if (!scopePath || !hub) return;
     setLoading(true);
-    const res = await listResources({ scopePath, hub, skipAuthCheck: true });
+    const res = await listResources({ scopePath, hub, skipAuthCheck: true, adminView: true });
     setItems(res.items);
     if (res.error) setToast(res.error);
     setLoading(false);
