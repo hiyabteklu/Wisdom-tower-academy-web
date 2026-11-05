@@ -6,6 +6,7 @@
 
 import { ExamQuestion, TowerTrack } from "./types";
 import { listResources, type LearningResource } from "@/lib/contentWithOffline";
+import { getResourceById } from "@/lib/content";
 import { isPackageOwned, isFreeForRegistered } from "@/lib/ownership";
 
 // Curated authentic national leaving and university exit model exam questions
@@ -394,7 +395,15 @@ export async function getPlayableExamTowers(): Promise<TowerTrack[]> {
     });
 
     if (liveExams.items && liveExams.items.length > 0) {
-      for (const res of liveExams.items) {
+      // List rows are light; only the checked door may provide answer keys and
+      // question JSON to this dynamic exam integration.
+      const checkedItems = await Promise.all(
+        liveExams.items.map(async (candidate) => (await getResourceById(candidate.id)).item)
+      );
+      const accessibleItems = checkedItems.filter(
+        (item): item is LearningResource => Boolean(item)
+      );
+      for (const res of accessibleItems) {
         const rawQuestions = Array.isArray(res.meta?.questions)
           ? (res.meta.questions as Record<string, unknown>[])
           : [];
