@@ -47,7 +47,7 @@ export async function GET(req: NextRequest) {
     // Students and signed-out visitors receive catalog metadata only. Full note text,
     // questions and flashcard JSON are returned only by the per-resource checked door.
     // Admin editors use the admin-only view, which checks private.is_admin() server-side.
-    const source = isAdmin ? "learning_resources_admin" : "learning_resources";
+    const source = isAdmin ? "learning_resources_admin" : "learning_resources_public";
     const columns = isAdmin ? "*" : PUBLIC_COLUMNS;
     let q = supabase.from(source).select(columns).order("sort_order", { ascending: true });
 
