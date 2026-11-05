@@ -237,7 +237,7 @@ export async function POST(req: NextRequest) {
     // This endpoint sends real email/SMS messages. Require a fresh Supabase JWT
     // and a server-verified admin check before using the service-role client.
     const authorization = req.headers.get("authorization") || "";
-    const token = authorization.match(/^Bearer\\s+(.+)$/i)?.[1]?.trim();
+    const token = authorization.match(/^Bearer\s+(.+)$/i)?.[1]?.trim();
     if (!token) {
       return NextResponse.json({ ok: false, error: "Admin sign-in required." }, { status: 401 });
     }
