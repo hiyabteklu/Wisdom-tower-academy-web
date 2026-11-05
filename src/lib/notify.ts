@@ -1,3 +1,5 @@
+import { supabase } from "@/lib/supabase";
+
 /**
  * Client helpers to trigger approval / rejection notifications.
  * Actual sending runs server-side in /api/notify-approval.
@@ -10,12 +12,18 @@ export type NotifyResult = {
   error?: string;
 };
 
-export async function notifyApproval(orderId: string): Promise<NotifyResult> {
+async function postApprovalNotification(orderId: string, type: "approved" | "rejected"): Promise<NotifyResult> {
   try {
+    const { data: authData } = await supabase.auth.getSession();
+    const token = authData.session?.access_token;
+    if (!token) return { ok: false, error: "Admin sign-in required." };
     const res = await fetch("/api/notify-approval", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ orderId, type: "approved" }),
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({ orderId, type }),
     });
     const data = (await res.json()) as NotifyResult;
     if (!res.ok) {
@@ -31,26 +39,14 @@ export async function notifyApproval(orderId: string): Promise<NotifyResult> {
   }
 }
 
-export async function notifyRejection(orderId: string): Promise<NotifyResult> {
-  try {
-    const res = await fetch("/api/notify-approval", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ orderId, type: "rejected" }),
-    });
-    const data = (await res.json()) as NotifyResult;
-    if (!res.ok) {
-      return {
-        ...data,
-        ok: false,
-        error: data.error || "Notify failed",
-      };
-    }
-    return data;
-  } catch (e) {
-    return { ok: false, error: e instanceof Error ? e.message : "Network error" };
-  }
+export async function notifyApproval(orderId: string): Promise<NotifyResult> {
+  return postApprovalNotification(orderId, "approved");
 }
+
+export async function notifyRejection(orderId: string): Promise<NotifyResult> {
+  return postApprovalNotification(orderId, "rejected");
+}
+
 
 export function formatNotifyToast(n: NotifyResult, verb: "Approved" | "Rejected"): string {
   if (!n.ok && n.error) return `${verb}, but notify failed: ${n.error}`;
