@@ -226,31 +226,60 @@ export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
     const orderId = String(body.orderId || "").trim();
-    const type: NotifyType = body.type === "rejected" ? "rejected" : "approved";
+    if (!orderId || orderId.length > 128) {
+      return NextResponse.json({ ok: false, error: "A valid orderId is required." }, { status: 400 });
+    }
+    if (body.type !== "approved" && body.type !== "rejected") {
+      return NextResponse.json({ ok: false, error: "Invalid notification type." }, { status: 400 });
+    }
+    const type: NotifyType = body.type;
 
-    if (!orderId) {
-      return NextResponse.json({ ok: false, error: "orderId required" }, { status: 400 });
+    // This endpoint sends real email/SMS messages. Require a fresh Supabase JWT
+    // and a server-verified admin check before using the service-role client.
+    const authorization = req.headers.get("authorization") || "";
+    const token = authorization.match(/^Bearer\\s+(.+)$/i)?.[1]?.trim();
+    if (!token) {
+      return NextResponse.json({ ok: false, error: "Admin sign-in required." }, { status: 401 });
     }
 
     const url = process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL;
-    const key =
-      process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-
-    if (!url || !key) {
+    const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+    const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+    if (!url || !anonKey || !serviceRoleKey) {
       return NextResponse.json({ ok: false, error: "Supabase env missing" }, { status: 500 });
     }
 
-    const supabase = createClient(url, key);
-    const { data: order, error } = await supabase
+    const authClient = createClient(url, anonKey, {
+      global: { headers: { Authorization: `Bearer ${token}` } },
+      auth: { persistSession: false, autoRefreshToken: false },
+    });
+    const { data: authData, error: authError } = await authClient.auth.getUser(token);
+    if (authError || !authData.user) {
+      return NextResponse.json({ ok: false, error: "Admin session expired. Sign in again." }, { status: 401 });
+    }
+    const { data: isAdmin, error: adminError } = await authClient.rpc("am_i_admin");
+    if (adminError || isAdmin !== true) {
+      return NextResponse.json({ ok: false, error: "Admin access required." }, { status: 403 });
+    }
+
+    // Privileged order lookup is now behind the fresh admin check above.
+    const adminClient = createClient(url, serviceRoleKey, {
+      auth: { persistSession: false, autoRefreshToken: false },
+    });
+    const { data: order, error } = await adminClient
       .from("orders")
-      .select("*")
+      .select("id,status,student_name,package_name,amount_etb,email,phone")
       .eq("id", orderId)
       .maybeSingle();
 
     if (error || !order) {
+      return NextResponse.json({ ok: false, error: "Order not found." }, { status: 404 });
+    }
+    const expectedStatus = type === "approved" ? "verified" : "rejected";
+    if (order.status !== expectedStatus) {
       return NextResponse.json(
-        { ok: false, error: error?.message || "Order not found" },
-        { status: 404 }
+        { ok: false, error: "The order status does not match this notification action." },
+        { status: 409 }
       );
     }
 
