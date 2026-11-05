@@ -12,6 +12,7 @@ import {
   type HubId,
   type ProgressMeta,
 } from "@/lib/contentWithOffline";
+import { getResourceById, getPaidBookUrl } from "@/lib/content";
 import { getSeenResourceIds, markResourceSeen } from "@/lib/seenItems";
 import { isFreeForRegistered, isPackageOwned } from "@/lib/ownership";
 import { cleanCorruptAuthTokens } from "@/lib/supabase";
@@ -109,6 +110,7 @@ export default function HubContentView({
   const [fetchError, setFetchError] = useState<string | null>(null);
   const [active, setActive] = useState<LearningResource | null>(null);
   const [pdfUrl, setPdfUrl] = useState<string | null>(null);
+  const [openingItem, setOpeningItem] = useState(false);
   const [progressPct, setProgressPct] = useState(0);
   const [seconds, setSeconds] = useState(0);
   const [focusSeconds, setFocusSeconds] = useState(0);
@@ -231,30 +233,54 @@ export default function HubContentView({
   }, [active]);
 
   async function openItem(item: LearningResource) {
-    markResourceSeen(item.id);
-    setSeenIds(getSeenResourceIds());
+    if (openingItem) return;
+    setOpeningItem(true);
+    setFetchError(null);
+    try {
+      // List rows are deliberately light. The per-item RPC rechecks sign-in, device
+      // status, publication and entitlement before returning note/question content.
+      const checked = await getResourceById(item.id);
+      if (!checked.item) {
+        setFetchError(checked.error || "This material could not be opened.");
+        return;
+      }
+      const openedItem = checked.item;
+      let nextPdfUrl: string | null = null;
 
-    setActive(item);
-    videoWatchRef.current = 0;
-    const prog = await getMyProgress(item.id);
-    setProgressPct(prog.pct);
-    setSeconds(prog.totalSeconds);
-    setFocusSeconds(prog.focusSeconds);
-    setProgMeta(prog.meta || {});
+      if (openedItem.contentType === "pdf" && openedItem.storagePath) {
+        if (openedItem.storagePath.toLowerCase().startsWith("appwrite-paid:")) {
+          const paid = await getPaidBookUrl(openedItem.id);
+          if (!paid.url) {
+            setFetchError(paid.error || "This paid PDF could not be opened.");
+            return;
+          }
+          nextPdfUrl = paid.url;
+        } else {
+          nextPdfUrl = `/api/content/pdf?path=${encodeURIComponent(openedItem.storagePath)}`;
+        }
+      }
 
-    if (item.contentType === "pdf" && item.storagePath) {
-      setPdfUrl(`/api/content/pdf?path=${encodeURIComponent(item.storagePath)}`);
-    } else {
-      setPdfUrl(null);
-    }
+      markResourceSeen(openedItem.id);
+      setSeenIds(getSeenResourceIds());
+      setActive(openedItem);
+      videoWatchRef.current = 0;
+      const prog = await getMyProgress(openedItem.id);
+      setProgressPct(prog.pct);
+      setSeconds(prog.totalSeconds);
+      setFocusSeconds(prog.focusSeconds);
+      setProgMeta(prog.meta || {});
+      setPdfUrl(nextPdfUrl);
 
-    if (typeof window !== "undefined") {
-      try {
-        const url = new URL(window.location.href);
-        url.searchParams.set("res", item.id);
-        window.history.replaceState(null, "", url.pathname + url.search);
-        sessionStorage.setItem("wt_prior_study_route", url.pathname + url.search);
-      } catch {}
+      if (typeof window !== "undefined") {
+        try {
+          const url = new URL(window.location.href);
+          url.searchParams.set("res", openedItem.id);
+          window.history.replaceState(null, "", url.pathname + url.search);
+          sessionStorage.setItem("wt_prior_study_route", url.pathname + url.search);
+        } catch {}
+      }
+    } finally {
+      setOpeningItem(false);
     }
   }
 
@@ -329,6 +355,14 @@ export default function HubContentView({
         >
           Buy package
         </Link>
+      </div>
+    );
+  }
+
+  if (openingItem && !active) {
+    return (
+      <div className="rounded-2xl border border-cyan-400/20 bg-wisdom-card p-8 text-center text-sm text-wisdom-muted">
+        Checking your access and opening the material…
       </div>
     );
   }
@@ -575,6 +609,12 @@ export default function HubContentView({
 
   return (
     <div className="space-y-4 w-full max-w-full">
+      {fetchError && (
+        <div className="rounded-xl border border-rose-400/25 bg-rose-500/10 px-4 py-3 text-sm text-rose-100">
+          {fetchError}
+          <button type="button" onClick={() => setFetchError(null)} className="ml-3 underline text-xs">Dismiss</button>
+        </div>
+      )}
       {/* Featured Game Banners in Learning Hubs (Hidden/Commented per preference) */}
       {/*
       {hub === "exams" && (
