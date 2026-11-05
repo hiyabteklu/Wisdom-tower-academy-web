@@ -113,7 +113,11 @@ export async function GET(req: NextRequest) {
         chapter: row.chapter != null ? Number(row.chapter) : null,
         sortOrder: Number(row.sort_order ?? 0),
         contentType: row.content_type,
-        storagePath: row.storage_path ? String(row.storage_path) : null,
+        storagePath: row.storage_path
+          ? (isAdmin || !String(row.storage_path).toLowerCase().startsWith("appwrite-paid:")
+              ? String(row.storage_path)
+              : null)
+          : null,
         bodyMd: isAdmin && row.body_md != null ? String(row.body_md) : null,
         meta: isAdmin ? ((row.meta as Record<string, unknown>) || {}) : {},
         published: Boolean(row.published),
