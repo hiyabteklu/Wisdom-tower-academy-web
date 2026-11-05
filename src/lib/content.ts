@@ -323,7 +323,12 @@ export async function listResources(opts: {
         if (opts.hub) params.set("hub", opts.hub);
         if (opts.packageId) params.set("packageId", opts.packageId);
         if (opts.publishedOnly) params.set("publishedOnly", "true");
-        const apiRes = await fetch(`/api/content/resources?${params.toString()}`);
+        const { data: authData } = await supabase.auth.getSession();
+        const accessToken = authData.session?.access_token;
+        const apiRes = await fetch(`/api/content/resources?${params.toString()}`, {
+          headers: accessToken ? { Authorization: `Bearer ${accessToken}` } : {},
+          cache: "no-store",
+        });
         if (apiRes.ok) {
           const json = await apiRes.json();
           if (Array.isArray(json?.items) && json.items.length > 0) {
@@ -402,35 +407,48 @@ export async function getResourceById(
   id: string
 ): Promise<{ item?: LearningResource; error?: string }> {
   try {
-    let { data, error } = await supabase
-      .from("learning_resources")
-      .select("*")
-      .eq("id", id)
-      .maybeSingle();
-
-    if (error && isCryptoOrTokenError(error.message)) {
-      cleanCorruptAuthTokens();
-      try {
-        const anon = getAnonSupabaseClient();
-        const retryRes = await anon
-          .from("learning_resources")
-          .select("*")
-          .eq("id", id)
-          .maybeSingle();
-        if (retryRes.data) {
-          data = retryRes.data;
-          error = null;
-        }
-      } catch {
-        /* ignore */
-      }
+    const { data, error } = await supabase.rpc("open_resource_web", { p_id: id });
+    if (error) return { error: "Unable to verify access to this material. Please retry." };
+    const answer = data as Record<string, unknown> | null;
+    const status = String(answer?.status || "");
+    if (status === "not_signed_in") return { error: "Sign in to open this material." };
+    if (status === "device_not_active") return { error: "This account is active on another device. Review your account device settings." };
+    if (status === "not_found") return { error: "This material is no longer available." };
+    if (status === "locked") {
+      return {
+        error: answer?.gate === "package_required"
+          ? "Purchase or unlock the required package to open this material."
+          : "This material is not available yet.",
+      };
     }
-
-    if (error) return { error: "Unable to load item." };
-    if (!data) return {};
-    return { item: rowToResource(data as Record<string, unknown>) };
+    if (status !== "ok" || !answer?.row || typeof answer.row !== "object") {
+      return { error: "The server returned an unexpected access response." };
+    }
+    return { item: rowToResource(answer.row as Record<string, unknown>) };
   } catch {
-    return { error: "Unable to load item." };
+    return { error: "Unable to verify access to this material. Please retry." };
+  }
+}
+
+/** Requests a short-lived Appwrite URL for a paid PDF through the JWT-verified Edge Function. */
+export async function getPaidBookUrl(
+  resourceId: string
+): Promise<{ url?: string; error?: string }> {
+  try {
+    const { data, error } = await supabase.functions.invoke("book-url", {
+      body: { id: resourceId, client_type: "web" },
+    });
+    if (error) return { error: "Unable to verify access to this paid PDF. Please retry." };
+    const answer = data as Record<string, unknown> | null;
+    if (answer?.status === "ok" && typeof answer.url === "string" && answer.url.startsWith("https://")) {
+      return { url: answer.url };
+    }
+    if (answer?.status === "locked") return { error: "Purchase or unlock the required package to open this PDF." };
+    if (answer?.status === "device_not_active") return { error: "This account is active on another device. Review your account device settings." };
+    if (answer?.status === "not_signed_in") return { error: "Sign in to open this PDF." };
+    return { error: "This paid PDF is not available right now." };
+  } catch {
+    return { error: "Unable to open this paid PDF. Please retry." };
   }
 }
 
