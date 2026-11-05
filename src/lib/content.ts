@@ -132,7 +132,9 @@ function rowToResource(row: Record<string, unknown>): LearningResource {
     chapter: row.chapter != null ? Number(row.chapter) : null,
     sortOrder: Number(row.sort_order ?? 0),
     contentType: row.content_type as ContentType,
-    storagePath: row.storage_path ? String(row.storage_path) : null,
+    storagePath: row.storage_path
+      ? (String(row.storage_path).toLowerCase().startsWith("appwrite-paid:") ? "appwrite-paid:" : String(row.storage_path))
+      : null,
     bodyMd: row.body_md != null ? String(row.body_md) : null,
     meta: (row.meta as Record<string, unknown>) || {},
     published: Boolean(row.published),
