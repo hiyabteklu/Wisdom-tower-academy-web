@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
 import {
   APPWRITE_PATH_PREFIX,
   isAppwriteStoragePath,
@@ -39,6 +38,14 @@ export async function HEAD(req: NextRequest) {
   const path = req.nextUrl.searchParams.get("path");
   if (!path || path.includes("..")) {
     return new NextResponse(null, { status: 400 });
+  }
+  // Paid Appwrite PDFs must only be opened through the authenticated book-url
+  // Edge Function, which checks entitlement and issues a short-lived token.
+  if (path.toLowerCase().startsWith("appwrite-paid:")) {
+    return new NextResponse(null, {
+      status: 403,
+      headers: { "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff" },
+    });
   }
 
   if (isAppwriteStoragePath(path) || path.startsWith(APPWRITE_PATH_PREFIX)) {
@@ -93,13 +100,10 @@ export async function HEAD(req: NextRequest) {
     }
   }
 
-  // Legacy Supabase: no cheap HEAD; return 200 without length
+  // No legacy Supabase-backed PDF rows remain. Reject arbitrary storage paths.
   return new NextResponse(null, {
-    status: 200,
-    headers: {
-      "Content-Type": "application/pdf",
-      "Cache-Control": "private, max-age=60",
-    },
+    status: 404,
+    headers: { "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff" },
   });
 }
 
@@ -109,7 +113,16 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "Missing path" }, { status: 400 });
   }
 
-  // --- Appwrite ---
+  // Paid Appwrite PDFs must never be proxied through this public route.
+  // Their only supported path is the authenticated book-url Edge Function.
+  if (path.toLowerCase().startsWith("appwrite-paid:")) {
+    return NextResponse.json(
+      { error: "Paid PDFs require an authenticated access check." },
+      { status: 403, headers: { "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff" } }
+    );
+  }
+
+  // --- Public Appwrite files (free books only) ---
   if (isAppwriteStoragePath(path) || path.startsWith(APPWRITE_PATH_PREFIX)) {
     const fileId =
       parseAppwriteFileId(path) || path.replace(/^appwrite:/i, "").trim();
@@ -170,37 +183,10 @@ export async function GET(req: NextRequest) {
     }
   }
 
-  // --- Legacy Supabase path (if any files remain) ---
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const key =
-    process.env.SUPABASE_SERVICE_ROLE_KEY ||
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-
-  if (!url || !key) {
-    return NextResponse.json({ error: "Server misconfigured" }, { status: 500 });
-  }
-
-  const supabase = createClient(url, key);
-  const { data, error } = await supabase.storage
-    .from("learning-content")
-    .download(path);
-
-  if (error || !data) {
-    return NextResponse.json(
-      { error: error?.message || "Not found" },
-      { status: 404 }
-    );
-  }
-
-  const buf = await data.arrayBuffer();
-  return new NextResponse(buf, {
-    status: 200,
-    headers: {
-      "Content-Type": "application/pdf",
-      "Content-Length": String(buf.byteLength),
-      "Content-Disposition": 'inline; filename="document.pdf"',
-      "Cache-Control": "private, max-age=300",
-      "X-Content-Type-Options": "nosniff",
-    },
-  });
+  // No legacy Supabase-backed PDF rows remain. Reject arbitrary storage paths;
+  // never use a service-role key to proxy an unverified path.
+  return NextResponse.json(
+    { error: "This PDF storage path is not supported." },
+    { status: 404, headers: { "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff" } }
+  );
 }
