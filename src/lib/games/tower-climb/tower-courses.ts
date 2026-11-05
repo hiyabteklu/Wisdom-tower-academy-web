@@ -20,6 +20,7 @@ import {
 } from "./config";
 import { loadClimbProfile } from "./store";
 import { listResources, type LearningResource } from "@/lib/contentWithOffline";
+import { getResourceById } from "@/lib/content";
 import { isPackageOwned, isFreeForRegistered } from "@/lib/ownership";
 
 // =========================================================================
@@ -682,9 +683,17 @@ export async function getPlayableCourseTowers(): Promise<CourseTower[]> {
     });
 
     if (qbRes.items && qbRes.items.length > 0) {
-      // Group by scopePath
+      // Lists contain metadata only. Fetch each candidate through the checked
+      // website door before a game can use its question JSON.
+      const checkedItems = await Promise.all(
+        qbRes.items.map(async (candidate) => (await getResourceById(candidate.id)).item)
+      );
+      const accessibleItems = checkedItems.filter(
+        (item): item is LearningResource => Boolean(item)
+      );
+      // Group only server-authorized resources by scopePath.
       const groups = new Map<string, LearningResource[]>();
-      for (const item of qbRes.items) {
+      for (const item of accessibleItems) {
         if (!groups.has(item.scopePath)) groups.set(item.scopePath, []);
         groups.get(item.scopePath)!.push(item);
       }
