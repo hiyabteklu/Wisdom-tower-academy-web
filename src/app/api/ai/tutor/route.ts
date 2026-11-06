@@ -1,5 +1,6 @@
 import { GoogleGenAI } from "@google/genai";
 import { NextRequest } from "next/server";
+import { getTutorCandidates } from "../../../../lib/aiTutorConfig";
 
 // Provider candidate definition
 type Candidate =
@@ -22,6 +23,9 @@ const GATEWAY_TUTOR_MODEL = process.env.AI_GATEWAY_TUTOR_MODEL || "openai/gpt-4o
 // 5) Gemini: gemini-3.5-flash
 // 6) Gemini: gemini-3.6-flash
 // Removed (unreliable): gemini-3.8-flash, gemini-3.7-flash, *-latest aliases.
+//
+// U2b: this list is the BUILT-IN DEFAULT. When the Supabase table `ai_config` is switched on (enabled = true), its
+// primary model and fallback list are tried first and these defaults stay at the end (see src/lib/aiTutorConfig.ts).
 const CANDIDATES: Candidate[] = [
   { provider: "gateway", model: GATEWAY_TUTOR_MODEL, timeoutMs: 7000 },
   { provider: "gemini", model: "gemini-3.1-flash-lite" },
@@ -420,11 +424,13 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    // Try candidates in the order defined in CANDIDATES above.
+    // Try candidates in the order defined in CANDIDATES above (U2b: the owner's ai_config list first, when switched on).
     let activeIterator: any = null;
     let firstChunkText = "";
 
-    for (const candidate of CANDIDATES) {
+    const candidatesToTry: Candidate[] = await getTutorCandidates(CANDIDATES);
+
+    for (const candidate of candidatesToTry) {
       const timeoutMs = candidate.timeoutMs ?? PER_ATTEMPT_TIMEOUT_MS;
       try {
         if (candidate.provider === "gateway") {
