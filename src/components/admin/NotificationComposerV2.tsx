@@ -22,6 +22,10 @@
  * confirm box before "Send now" (same message; pressing Send runs the same checks again and then sends).
  * One small change: scrolling to the form when Edit is pressed is no longer animated (the admin layout turns
  * smooth scrolling off because it may fight touch scrolling in the WebView).
+ *
+ * 2026-11-06 (Drafts): a "Drafts" card above step 1 (NotificationDraftsPicker, data in
+ * src/lib/notification-drafts.ts). Load fills category, title, blocks and destination; it never sends and
+ * never picks an audience. Hidden while a scheduled row is being edited. Send / schedule logic unchanged.
  */
 
 import { useEffect, useRef, useState } from "react";
@@ -44,8 +48,10 @@ import {
   findNotificationPath,
   type NotificationPathNode,
 } from "@/lib/notification-paths";
+import type { NotificationDraft } from "@/lib/notification-drafts";
 import { NotificationBlockEditor, NotificationPreview } from "./NotificationBlockEditor";
 import NotificationAudiencePicker from "./NotificationAudiencePicker";
+import NotificationDraftsPicker from "./NotificationDraftsPicker";
 import {
   formatEat,
   friendlyScheduleError,
@@ -195,6 +201,24 @@ export default function NotificationComposerV2({
     setTitle("");
     setBlocks(initialBlocks());
     setSendAtLocal("");
+  }
+
+  // Fill the whole form from a ready-made draft. Never sends; the audience is left for the admin to pick.
+  function loadDraft(draft: NotificationDraft) {
+    setCategory(draft.category);
+    setTitle(draft.title);
+    setBlocks(draft.blocks.map((b) => newEditorBlock(b.t, b.text ?? "")));
+    setTrail(draft.category === "material" && draft.url ? trailForPath(draft.url) ?? [] : []);
+    setMode("groups");
+    setGroups([]);
+    setTargetUser("");
+    setWhen("now");
+    setSendAtLocal("");
+    setFeedback({
+      ok: true,
+      message: `Draft "${draft.name}" loaded. Check it, choose the audience, then press Send now.`,
+    });
+    rootRef.current?.scrollIntoView({ behavior: "auto", block: "start" });
   }
 
   // skipConfirm is true only when the admin pressed Send in the confirm sheet (the checks run again).
@@ -389,6 +413,9 @@ export default function NotificationComposerV2({
             <span className="min-w-0 break-words">{feedback.message}</span>
           </div>
         )}
+
+        {/* Drafts (ready-made messages; Load only fills the form) */}
+        {!editing && <NotificationDraftsPicker onLoad={loadDraft} />}
 
         {/* 1 Category */}
         <div className="space-y-2">
